@@ -101,11 +101,13 @@ test.skipIf(!process.env.BB_E2E_URL)("fullscreen verdict → submitted → reloa
     await page.getByRole("button", { name: "Add comment", exact: true }).click();
     await page.getByRole("textbox", { name: "Draft comment", exact: true }).fill("Please cover blank input in a test.");
     await page.getByRole("button", { name: "Add to draft", exact: true }).click();
-    await page.getByText("Please cover blank input in a test.", { exact: true }).waitFor();
+    await reviewTools.getByText("Please cover blank input in a test.", { exact: true }).waitFor();
     await page.getByRole("button", { name: "Edit comment on src/input.ts:1", exact: true }).click();
     await page.getByRole("textbox", { name: "Draft comment", exact: true }).fill("Please test whitespace-only input too.");
     await page.getByRole("button", { name: "Save comment", exact: true }).click();
-    await page.getByText("Please test whitespace-only input too.", { exact: true }).waitFor();
+    await reviewTools.getByText("Please test whitespace-only input too.", { exact: true }).waitFor();
+    // The diff shows the comment under its line too.
+    await page.getByRole("article", { name: "Draft comment on src/input.ts:1", exact: true }).getByText("Please test whitespace-only input too.", { exact: true }).waitFor();
     expect(store.getDraft(key).comments).toHaveLength(1);
     await page.getByRole("button", { name: "Review summary", exact: true }).click();
     await page.getByRole("textbox", { name: "Review summary", exact: true }).fill("The validation looks good with this test follow-up.");

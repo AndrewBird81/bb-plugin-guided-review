@@ -18,6 +18,12 @@ const commentShape = z
   })
   .strict();
 
+// A draft, plus where its comments were drafted against an older diff.
+const draftOutput = z.object({
+  draft: z.any(),
+  stale: z.array(z.object({ file: z.string(), line: z.number().int(), side: z.enum(["LEFT", "RIGHT"]) })),
+});
+
 export const rpcContract = defineRpcContract({
   ...releaseRpc,
   getSetupStatus: { input: z.null(), output: z.object({ account: z.string().nullable(), githubCli: z.boolean(), agentAvailable: z.boolean().nullable(), projectAvailable: z.boolean().nullable() }) },
@@ -87,14 +93,14 @@ export const rpcContract = defineRpcContract({
   deleteReview: { input: targetKey, output: z.object({ ok: z.boolean(), error: z.string().optional() }) },
 
   // Task 11: draft + submit
-  getDraft: { input: targetKey, output: z.object({ draft: z.any() }) },
+  getDraft: { input: targetKey, output: draftOutput },
   saveDraftComment: {
     input: z.object({ targetKey: z.string(), revision: z.string().optional(), comment: commentShape }).strict(),
-    output: z.object({ draft: z.any() }),
+    output: draftOutput,
   },
   removeDraftComment: {
     input: z.object({ targetKey: z.string(), file: z.string(), line: z.number().int(), side: z.enum(["LEFT", "RIGHT"]) }).strict(),
-    output: z.object({ draft: z.any() }),
+    output: draftOutput,
   },
   setVerdict: {
     input: z

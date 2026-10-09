@@ -1,17 +1,22 @@
-import { memo, useMemo, useState } from "react";
+import { memo, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { parsePatchFiles } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
-import type { SelectedLineRange } from "@pierre/diffs";
+import type { AnnotationSide, DiffLineAnnotation, FileDiffMetadata, FileDiffOptions, SelectedLineRange } from "@pierre/diffs";
 import { splitPatchByFile } from "../src/patch";
+import { sameLocation, type CommentLocation, type DraftComment } from "../src/draft";
 import { cn } from "../lib/utils";
 import { Icon } from "./ui/icon";
 import { FileTag } from "./FileTag";
 import { useMediaQuery } from "./ui/hooks/use-media-query";
+import { InlineDraftComment, InlineDraftComposer, InlineDraftContext, locationKey } from "./InlineDraft";
 
 export interface FileViewFlags {
   viewed: boolean;
   stale: boolean;
 }
+
+/** What pierre shows under a line: a draft comment, or the comment box. */
+type Annotation = { kind: "comment"; comment: DraftComment } | { kind: "composer" };
 
 // NOTE: @pierre/diffs@1.3.6 — `parsePatchFiles` returns `ParsedPatch[]`, each
 // with a nested `.files`; `FileDiff`'s prop is `fileDiff` and the theme lives
@@ -32,6 +37,62 @@ function diffStats(text: string): { add: number; del: number } {
   return { add, del };
 }
 
+const annotationSide = (side: "LEFT" | "RIGHT"): AnnotationSide => (side === "LEFT" ? "deletions" : "additions");
+
+// Scrolls the review only vertically: scrollIntoView would also scroll the diff's code sideways.
+function scrollToCenter(el: HTMLElement, behavior: ScrollBehavior) {
+  let box = el.parentElement;
+  while (box && !(box.scrollHeight > box.clientHeight && /auto|scroll/.test(getComputedStyle(box).overflowY))) box = box.parentElement;
+  if (!box) return;
+  const target = el.getBoundingClientRect();
+  const view = box.getBoundingClientRect();
+  box.scrollBy({ top: target.top - view.top - (view.height - target.height) / 2, behavior });
+}
+
+function renderAnnotation({ metadata }: DiffLineAnnotation<Annotation>) {
+  return metadata.kind === "composer" ? <InlineDraftComposer /> : <InlineDraftComment comment={metadata.comment} />;
+}
+
+// One file's diff. Pierre redraws a file whenever its options or annotations
+// are new objects, which also takes focus from an open comment box, so both
+// stay the same until something in them changes.
+const FileBody = memo(function FileBody({ path, fileDiff, darkTheme, lightTheme, themeMode, diffStyle, annotations, onLineSelected, onComment }: {
+  path: string;
+  fileDiff: FileDiffMetadata;
+  darkTheme?: string;
+  lightTheme?: string;
+  themeMode?: "light" | "dark";
+  diffStyle: "split" | "unified";
+  annotations: DiffLineAnnotation<Annotation>[];
+  onLineSelected?: (file: string, range: SelectedLineRange | null) => void;
+  onComment?: (at: CommentLocation) => void;
+}) {
+  const fromGutter = useRef(false);
+  const options = useMemo<FileDiffOptions<Annotation>>(() => ({
+    ...(darkTheme && lightTheme ? { theme: { dark: darkTheme, light: lightTheme } } : {}),
+    themeType: themeMode,
+    diffStyle,
+    // GitHub-style line picking: drag to select a range to comment on or ask
+    // about, or use the gutter "+" to open a comment box at a line.
+    // Uncontrolled — pierre paints the highlight.
+    enableLineSelection: true,
+    enableGutterUtility: true,
+    onLineSelected: (range) => { if (!fromGutter.current) onLineSelected?.(path, range); },
+    onGutterUtilityClick: (range) => {
+      if (!onComment) return onLineSelected?.(path, range);
+      // Pierre reports the "+" as a line selection too, which would offer the selection's actions over the box.
+      fromGutter.current = true;
+      queueMicrotask(() => { fromGutter.current = false; });
+      onComment({ file: path, line: range.end, side: (range.endSide ?? range.side) === "deletions" ? "LEFT" : "RIGHT" });
+    },
+  }), [darkTheme, lightTheme, themeMode, diffStyle, path, onLineSelected, onComment]);
+  return (
+    <div className="overflow-x-auto">
+      <FileDiff fileDiff={fileDiff} options={options} lineAnnotations={annotations} renderAnnotation={renderAnnotation} />
+    </div>
+  );
+});
+
 export const DiffViewer = memo(function DiffViewer({
   patch,
   files,
@@ -41,6 +102,7 @@ export const DiffViewer = memo(function DiffViewer({
   onLineSelected,
   themeMode,
   diffLayout = "split",
+  reveal,
 }: {
   diffLayout?: "split" | "unified";
   themeMode?: "light" | "dark";
@@ -50,9 +112,13 @@ export const DiffViewer = memo(function DiffViewer({
   onToggleViewed: (file: string, viewed: boolean) => void;
   registerFileEl?: (file: string, el: HTMLElement | null) => void;
   onLineSelected?: (file: string, range: SelectedLineRange | null) => void;
+  /** Scroll to a comment's line, opening its file if it's collapsed. */
+  reveal?: { at: CommentLocation; nonce: number };
 }) {
   const theme = useTheme();
   const compact = useMediaQuery("(max-width: 767px)");
+  const draft = useContext(InlineDraftContext);
+  const root = useRef<HTMLDivElement>(null);
   const perFile = useMemo(() => {
     return splitPatchByFile(patch)
       .filter((f) => files.includes(f.path))
@@ -75,17 +141,63 @@ export const DiffViewer = memo(function DiffViewer({
     setCollapsed((c) => ({ ...c, [file]: next }));
   }
 
+  // Each file's draft comments and comment box. A file keeps its list until they change.
+  const previous = useRef(new Map<string, { key: string; list: DiffLineAnnotation<Annotation>[] }>());
+  const annotations = useMemo(() => {
+    const next = new Map<string, { key: string; list: DiffLineAnnotation<Annotation>[] }>();
+    for (const path of files) {
+      const composer = draft?.composer?.file === path ? draft.composer : null;
+      const comments = (draft?.comments ?? []).filter((c) => c.file === path && !(composer?.editing && sameLocation(c, composer)));
+      const key = JSON.stringify([composer && [composer.line, composer.side], comments.map((c) => [c.line, c.side, c.author, c.body])]);
+      const cached = previous.current.get(path);
+      next.set(path, cached?.key === key ? cached : { key, list: [
+        // The box comes first: pierre keys annotations by position, so comments coming and going don't remount it.
+        ...(composer ? [{ side: annotationSide(composer.side), lineNumber: composer.line, metadata: { kind: "composer" as const } }] : []),
+        ...comments.map((comment) => ({ side: annotationSide(comment.side), lineNumber: comment.line, metadata: { kind: "comment" as const, comment } })),
+      ] });
+    }
+    previous.current = next;
+    return next;
+  }, [files, draft?.comments, draft?.composer]);
+
+  // Opens the file, then scrolls to the line once the chapter's diffs stop moving:
+  // pierre draws each file once its highlighting loads, then sizes the rows beside comments.
+  useEffect(() => {
+    if (!reveal) return;
+    const { at } = reveal;
+    const behavior = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth";
+    setCollapsed((c) => ({ ...c, [at.file]: false }));
+    const drawn = () => Array.from(root.current?.querySelectorAll("diffs-container") ?? []).every((el) => el.shadowRoot?.querySelector("[data-line]"));
+    let tries = 0;
+    let lastHeight = -1;
+    let frame = requestAnimationFrame(function attempt() {
+      const fileEl = Array.from(root.current?.querySelectorAll<HTMLElement>("[data-file]") ?? []).find((el) => el.dataset.file === at.file);
+      const target = Array.from(fileEl?.querySelectorAll<HTMLElement>("[data-draft-at]") ?? []).find((el) => el.dataset.draftAt === locationKey(at));
+      const shown = !!target?.getClientRects().length;
+      const height = root.current?.offsetHeight ?? 0;
+      const settled = height === lastHeight;
+      lastHeight = height;
+      if (shown && drawn() && settled) scrollToCenter(target!, behavior);
+      else if (++tries < 90) frame = requestAnimationFrame(attempt);
+      else if (shown) scrollToCenter(target!, behavior);
+      else fileEl?.scrollIntoView({ behavior, block: "start" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [reveal]);
+
   if (perFile.length === 0) {
     return <p className="text-sm text-muted-foreground">No changes in this chapter.</p>;
   }
 
   return (
-    <div className="space-y-3">
+    <div ref={root} className="space-y-3">
       {perFile.map(({ path, stats, fileDiff }) => {
         const flags = views.get(path);
         const viewed = flags?.viewed ?? false;
         const stale = flags?.stale ?? false;
         const folded = isCollapsed(path);
+        const commentCount = draft?.comments.filter((c) => c.file === path).length ?? 0;
+        const commentLabel = `${commentCount} draft comment${commentCount === 1 ? "" : "s"}`;
         return (
           <div
             key={path}
@@ -113,6 +225,13 @@ export const DiffViewer = memo(function DiffViewer({
                 +{stats.add}
               </span>
               <span className="shrink-0 font-mono text-[10px] text-rose-600 dark:text-rose-400">−{stats.del}</span>
+              {commentCount > 0 && (
+                <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-muted-foreground" title={commentLabel}>
+                  <Icon name="MessageSquare" className="size-3" aria-hidden />
+                  <span aria-hidden>{commentCount}</span>
+                  <span className="sr-only">{commentLabel}</span>
+                </span>
+              )}
               {stale && (
                 <span
                   className="shrink-0 rounded-full border border-amber-500/40 px-1.5 py-0 text-[10px] leading-4 text-amber-600 dark:text-amber-400"
@@ -132,23 +251,17 @@ export const DiffViewer = memo(function DiffViewer({
               </label>
             </div>
             {!folded && (
-              <div className="overflow-x-auto">
-                <FileDiff
-                  fileDiff={fileDiff!}
-                  options={{
-                    ...(theme ? { theme } : {}),
-                    themeType: themeMode,
-                    diffStyle: compact ? "unified" : diffLayout,
-                    // GitHub-style line picking: drag to select a range, or use
-                    // the gutter "+". Uncontrolled — pierre paints the highlight;
-                    // we just capture the range to offer comment / ask-agent.
-                    enableLineSelection: true,
-                    enableGutterUtility: true,
-                    onLineSelected: (range) => onLineSelected?.(path, range),
-                    onGutterUtilityClick: (range) => onLineSelected?.(path, range),
-                  }}
-                />
-              </div>
+              <FileBody
+                path={path}
+                fileDiff={fileDiff!}
+                darkTheme={theme?.dark}
+                lightTheme={theme?.light}
+                themeMode={themeMode}
+                diffStyle={compact ? "unified" : diffLayout}
+                annotations={annotations.get(path)?.list ?? []}
+                onLineSelected={onLineSelected}
+                onComment={draft?.editable ? draft.open : undefined}
+              />
             )}
           </div>
         );

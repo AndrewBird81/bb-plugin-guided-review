@@ -127,7 +127,7 @@ test("the review activity rail collapses each tool without losing editor state",
   slot.lifecycle.unmount();
 });
 
-test("collapsed tool choice survives remount and a line-comment request reopens its editor", async () => {
+test("collapsed tool choice survives remount", async () => {
   await loadPluginApp(() => import("../app"));
   const { DraftTray } = await import("./DraftTray");
   const props = { targetKey: "sidebar-restore", activeChapterId: "c1", activeFiles: ["a.ts"] };
@@ -139,11 +139,6 @@ test("collapsed tool choice survives remount and a line-comment request reopens 
   slot = renderSlot({ component: (props: any) => <DraftTray {...props} /> }, props, { rpc });
   expect(slot.queryByRole("textbox", { name: "Private reviewer notes" })).toBeNull();
   expect(slot.getByRole("button", { name: "Reviewer notes" }).getAttribute("aria-expanded")).toBe("false");
-  slot.lifecycle.unmount();
-  slot = renderSlot({ component: (props: any) => <DraftTray {...props} /> }, { ...props, prefill: { file: "a.ts", line: 7, side: "RIGHT", nonce: 1 } }, { rpc });
-  await slot.findByRole("textbox", { name: "Draft comment" });
-  expect((slot.getByRole("spinbutton", { name: "Comment line" }) as HTMLInputElement).value).toBe("7");
-  expect(slot.getByRole("button", { name: "Draft comments" }).getAttribute("aria-expanded")).toBe("true");
   slot.lifecycle.unmount();
 });
 

@@ -3,6 +3,7 @@ import { useRpc, useRealtime, useBbNavigate } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { SelectedLineRange } from "@pierre/diffs";
 import type { rpcContract } from "../src/rpc-contract";
+import type { CommentLocation } from "../src/draft";
 import { cn } from "../lib/utils";
 import { experimental_useCodeTheme } from "@get-bb/plugin-sdk/app";
 import { useMediaQuery } from "./ui/hooks/use-media-query";
@@ -53,6 +54,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const [sel, setSel] = useState<{ x: number; y: number; file: string; code: string } | null>(null);
   const [lineSel, setLineSel] = useState<{ file: string; range: SelectedLineRange } | null>(null);
   const [draftPrefill, setDraftPrefill] = useState<CommentPrefill | undefined>();
+  const [reveal, setReveal] = useState<{ at: CommentLocation; nonce: number }>();
 
   // Screen utilization: resizable/collapsible sidebar, focus mode, fullscreen.
   const [sidebarWidth, setSidebarWidth] = useState(persisted.sidebarWidth ?? 288);
@@ -236,6 +238,18 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     [activeId, scrollToFile],
   );
 
+  // A comment chosen in the draft panel: show its line in the diff.
+  const showComment = useCallback((at: CommentLocation) => {
+    const chapter = guide?.sections.find((section: any) => section.diffs.some((diff: any) => diff.file === at.file));
+    if (!chapter) return;
+    setView("diff");
+    setActiveId(chapter.id);
+    setMobileChapters(false);
+    setReveal({ at, nonce: Date.now() });
+  }, [guide]);
+  // The diff remounts after Threads; it shouldn't jump back to an old comment.
+  useEffect(() => { if (view !== "diff") setReveal(undefined); }, [view]);
+
   useEffect(() => {
     if (pendingScroll.current && activeFiles.includes(pendingScroll.current)) {
       const f = pendingScroll.current;
@@ -277,7 +291,8 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     const node = range.commonAncestorContainer;
     const el = node.nodeType === 3 ? node.parentElement : (node as HTMLElement);
     const fileEl = el?.closest("[data-file]") as HTMLElement | null;
-    if (!fileEl) {
+    // Text in a draft comment or the comment box isn't code to ask about.
+    if (!fileEl || el?.closest("[data-draft-at]")) {
       setSel(null);
       return;
     }
@@ -391,6 +406,8 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         </p>
       )}
       <div className="flex min-h-0 flex-1 flex-col @min-[1024px]/review:flex-row">
+      {/* The draft panel owns the draft and shares it with the diff, which shows each comment under its line. */}
+      <DraftTray reviewRevision={revision} account={repoAccess?.account ?? undefined} agent={{ patch, injection, container: rootEl }} review={review} onSubmitted={() => { void load(); }} onShowComment={showComment} isLocal={review?.kind === "ref"} targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} prefill={draftPrefill}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
         {(compact ? mobileChapters : !sidebarCollapsed) && (
           <>
@@ -511,6 +528,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                 onToggleViewed={toggleViewed}
                 registerFileEl={registerFileEl}
                 onLineSelected={onLineSelected}
+                reveal={reveal}
               />
             ) : (
               <ThreadsPanel targetKey={targetKey} />
@@ -518,7 +536,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
           </div>
         </main>
       </div>
-        <DraftTray reviewRevision={revision} account={repoAccess?.account ?? undefined} agent={{ patch, injection, container: rootEl }} review={review} onSubmitted={() => { void load(); }} onSelectFile={(file) => { const chapter = guide.sections.find((section: any) => section.diffs.some((diff: any) => diff.file === file)); if (chapter) { setView("diff"); onSelectFile(chapter.id, file); } }} isLocal={review?.kind === "ref"} targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} prefill={draftPrefill} />
+      </DraftTray>
       </div>
 
       {/* Line-selection action bar — GitHub-style: pick lines, then act. */}

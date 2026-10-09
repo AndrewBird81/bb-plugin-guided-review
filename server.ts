@@ -72,6 +72,9 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.log.info("guided-review loaded");
 
+  // Comments drafted against an older diff, which submitting refuses.
+  const staleComments = (targetKey: string) => store.staleDraftComments(targetKey).map(({ file, line, side }) => ({ file, line, side }));
+
   const handlers: Omit<Parameters<typeof bb.rpc.register<typeof rpcContract>>[1], keyof typeof import("./src/plugin-updates").releaseRpc> = {
     async getSetupStatus() {
       const [cli, user, providers, projects] = await Promise.all([
@@ -241,15 +244,16 @@ export default async function plugin(bb: BbPluginApi) {
 
     // Task 11: draft + submit
     getDraft({ targetKey }) {
-      return { draft: store.getDraft(targetKey) };
+      return { draft: store.getDraft(targetKey), stale: staleComments(targetKey) };
     },
     saveDraftComment({ targetKey, comment, revision }) {
       requireReviewRevision(store, targetKey, revision);
-      return { draft: store.upsertDraftComment(targetKey, comment) };
+      return { draft: store.upsertDraftComment(targetKey, comment), stale: staleComments(targetKey) };
     },
     removeDraftComment({ targetKey, file, line, side }) {
       // Already gone, for example deleted by an agent: the current draft shows that.
-      return { draft: store.deleteDraftComment(targetKey, { file, line, side }) ?? store.getDraft(targetKey) };
+      const draft = store.deleteDraftComment(targetKey, { file, line, side }) ?? store.getDraft(targetKey);
+      return { draft, stale: staleComments(targetKey) };
     },
     setVerdict({ targetKey, verdict, body, revision }) {
       requireReviewRevision(store, targetKey, revision);

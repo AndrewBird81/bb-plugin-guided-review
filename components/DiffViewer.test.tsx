@@ -1,11 +1,24 @@
 // @vitest-environment jsdom
 import { test, expect, vi, afterEach } from "vitest";
-import { render, screen, fireEvent, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, cleanup, within } from "@testing-library/react";
 
-// Render only our chrome, not @pierre/diffs' internals.
-vi.mock("@pierre/diffs/react", () => ({ FileDiff: () => <div data-testid="filediff" /> }));
+// Render only our chrome and annotations, not @pierre/diffs' internals. Like
+// pierre, the gutter "+" reports a line selection right after its own click.
+vi.mock("@pierre/diffs/react", () => ({
+  FileDiff: ({ options, lineAnnotations, renderAnnotation }: any) => {
+    const range = { start: 2, end: 2, side: "additions" };
+    return (
+      <div data-testid="filediff">
+        {lineAnnotations?.map((annotation: any, index: number) => <div key={index}>{renderAnnotation?.(annotation)}</div>)}
+        <button onClick={() => { options.onGutterUtilityClick(range); options.onLineSelected(range); }}>Gutter +</button>
+        <button onClick={() => options.onLineSelected(range)}>Line number</button>
+      </div>
+    );
+  },
+}));
 
 import { DiffViewer, type FileViewFlags } from "./DiffViewer";
+import { InlineComposerContext, InlineDraftContext, type InlineComposer, type InlineDraft } from "./InlineDraft";
 
 afterEach(cleanup);
 
@@ -51,4 +64,73 @@ test("a stale file shows a 'changed' pill", () => {
     />,
   );
   expect(screen.getByText("changed")).toBeTruthy();
+});
+
+const comment = { file: "src/a.ts", line: 2, side: "RIGHT" as const, author: "agent" as const, body: "Is the empty case tested?" };
+
+function renderWithDraft(draft: Partial<InlineDraft>, props: Partial<Parameters<typeof DiffViewer>[0]> = {}, composer?: InlineComposer) {
+  const value: InlineDraft = { comments: [], stale: [], editable: true, busy: false, writing: false, composer: null, open: vi.fn(), remove: vi.fn(), ...draft };
+  render(
+    <InlineDraftContext.Provider value={value}>
+      <InlineComposerContext.Provider value={composer ?? null}>
+        <DiffViewer patch={patch} files={["src/a.ts"]} views={new Map()} onToggleViewed={() => {}} {...props} />
+      </InlineComposerContext.Provider>
+    </InlineDraftContext.Provider>,
+  );
+  return value;
+}
+
+test("draft comments show under their lines with who added them, and the file header counts them", () => {
+  renderWithDraft({ comments: [comment], stale: [{ file: "src/a.ts", line: 2, side: "RIGHT" }] });
+  const shown = screen.getByRole("article", { name: "Draft comment on src/a.ts:2" });
+  expect(within(shown).getByText("Is the empty case tested?")).toBeTruthy();
+  expect(within(shown).getByText("Added by agent")).toBeTruthy();
+  expect(within(shown).getByText("Older diff")).toBeTruthy();
+  expect(screen.getByText("1 draft comment")).toBeTruthy();
+});
+
+test("a comment's Edit and Remove act on it, and a collapsed file still counts it", () => {
+  const draft = renderWithDraft({ comments: [comment] });
+  const shown = screen.getByRole("article", { name: "Draft comment on src/a.ts:2" });
+  fireEvent.click(within(shown).getByRole("button", { name: "Edit" }));
+  expect(draft.open).toHaveBeenCalledWith(comment);
+  fireEvent.click(within(shown).getByRole("button", { name: "Remove" }));
+  expect(draft.remove).toHaveBeenCalledWith(comment);
+  fireEvent.click(screen.getByRole("checkbox"));
+  expect(screen.queryByRole("article")).toBeNull();
+  expect(screen.getByText("1 draft comment")).toBeTruthy();
+});
+
+test("the gutter + opens a comment box at its line instead of offering the selection's actions", async () => {
+  const onLineSelected = vi.fn();
+  const draft = renderWithDraft({}, { onLineSelected });
+  fireEvent.click(screen.getByRole("button", { name: "Gutter +" }));
+  expect(draft.open).toHaveBeenCalledWith({ file: "src/a.ts", line: 2, side: "RIGHT" });
+  expect(onLineSelected).not.toHaveBeenCalled();
+  await Promise.resolve();
+  fireEvent.click(screen.getByRole("button", { name: "Line number" }));
+  expect(onLineSelected).toHaveBeenCalledWith("src/a.ts", { start: 2, end: 2, side: "additions" });
+});
+
+test("a draft that can't change shows its comments read-only, and the gutter + offers the selection's actions", () => {
+  const onLineSelected = vi.fn();
+  const draft = renderWithDraft({ comments: [comment], editable: false }, { onLineSelected });
+  expect(within(screen.getByRole("article")).queryByRole("button")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Gutter +" }));
+  expect(draft.open).not.toHaveBeenCalled();
+  expect(onLineSelected).toHaveBeenCalledWith("src/a.ts", { start: 2, end: 2, side: "additions" });
+});
+
+test("the comment box takes the place of the comment it edits", () => {
+  const composer: InlineComposer = { body: "Is the empty case tested?", change: vi.fn(), save: vi.fn(), cancel: vi.fn(), textareaRef: { current: null } };
+  renderWithDraft({ comments: [comment], writing: true, composer: { file: "src/a.ts", line: 2, side: "RIGHT", editing: true } }, {}, composer);
+  expect(screen.queryByRole("article")).toBeNull();
+  const box = screen.getByRole("textbox", { name: "Draft comment" }) as HTMLTextAreaElement;
+  expect(box.value).toBe("Is the empty case tested?");
+  fireEvent.change(box, { target: { value: "Please test the empty case." } });
+  expect(composer.change).toHaveBeenCalledWith("Please test the empty case.");
+  fireEvent.click(screen.getByRole("button", { name: "Save comment" }));
+  expect(composer.save).toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  expect(composer.cancel).toHaveBeenCalled();
 });
