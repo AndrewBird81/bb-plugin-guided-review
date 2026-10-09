@@ -290,7 +290,7 @@ export default async function plugin(bb: BbPluginApi) {
     },
   };
   const guarded = Object.fromEntries(Object.entries(handlers).map(([name, handler]) =>
-    [name, (input: unknown) => updates.run(() => (handler as (input: unknown) => unknown)(input))])) as typeof handlers;
+    [name, (input: unknown) => updates.run(() => (handler as (input: unknown) => unknown)(input))])) as unknown as typeof handlers;
   bb.rpc.register(rpcContract, {
     ...guarded,
     getReleaseStatus: () => updates.status(),
