@@ -2,7 +2,7 @@ import { test, expect } from "vitest";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import type { BbPluginApi, PluginAgentConfigurationContext } from "@get-bb/plugin-sdk";
 import { createStore } from "./store";
-import { assistantInstructions, getConversation, newConversation, refreshAssistants, startConversation } from "./agent";
+import { assistantInstructions, getConversation, newConversation, refreshAssistants, startAutomaticReview, startConversation } from "./agent";
 import { defaultPreferences } from "./preferences";
 import { generateGuide } from "./generate";
 import plugin from "../server";
@@ -100,7 +100,8 @@ test("New conversation archives the thread and clears the legacy transcript", as
 
 test("instructions carry the review's current guide and preferences, trimmed to bb's limit", () => {
   const text = assistantInstructions("pr-1", guide("Retries failed refreshes") as any, { ...defaultPreferences, assistantInstructions: "Focus on security" });
-  for (const part of ['"pr-1"', "read_review_patch", "untrusted", "Focus on security", "Retries failed refreshes", "- Retry: Retries once."]) expect(text).toContain(part);
+  for (const part of ['"pr-1"', "read_review_patch", "add_draft_comment", "Never post to GitHub", "untrusted", "Focus on security", "Retries failed refreshes", "- Retry: Retries once."]) expect(text).toContain(part);
+  expect(text).not.toContain("Do not publish");
   const long = assistantInstructions("pr-1", { ...guide("Big"), sections: Array.from({ length: 200 }, (_, i) => ({ id: `s${i}`, title: `Chapter ${i}`, overview: "x".repeat(100), diffs: [] })) } as any, defaultPreferences);
   expect(long.length).toBe(4000);
   expect(long.endsWith("…")).toBe(true);
@@ -119,7 +120,7 @@ function reviewAgentContext(pluginMetadata: Record<string, string>): PluginAgent
   } as PluginAgentConfigurationContext;
 }
 
-test("the assistant gets its review's current instructions, without private notes, and only the read tool", async () => {
+test("the assistant gets its review's current instructions, without private notes, and only the read and draft-comment tools", async () => {
   const { bb, harness, store } = host();
   await plugin(bb);
   store.saveReviewerNotes("pr-1", "PRIVATE-SCRATCHPAD", 0);
@@ -127,7 +128,8 @@ test("the assistant gets its review's current instructions, without private note
   store.saveGuide("pr-1", guide("Old behavior") as any);
   store.saveGuide("pr-1", guide("New retry behavior") as any);
   const mine = await harness.behavior.resolveAgentConfiguration(reviewAgentContext({ targetKey: "pr-1" }));
-  expect(mine.tools.map((tool) => tool.name)).toEqual(["read_review_patch"]);
+  expect(mine.tools.map((tool) => tool.name)).toEqual(["read_review_patch", "add_draft_comment"]);
+  expect(mine.tools[1].instructions).toMatch(/Prefer this to a general remark.*Never post to GitHub yourself/s);
   expect(mine.skills).toEqual([]);
   expect(mine.instructions).toContain("New retry behavior");
   expect(mine.instructions).toContain("Focus on security");
@@ -151,6 +153,41 @@ test("idle assistants restart for new instructions after Re-review or a preferen
   expect(harness.inspection.sdk.callsTo("threads.stop")).toHaveLength(1);
   await harness.behavior.callRpc("savePreferences", { preferences: { ...defaultPreferences, diffLayout: "unified", assistantInstructions: "Be brief" }, revision: revision + 1 });
   await expect.poll(() => harness.inspection.sdk.callsTo("threads.stop")).toHaveLength(2);
+});
+
+test("a ready guide starts the automatic review when the review has no conversation", async () => {
+  const projectDefaults = { providerId: "codex", model: "gpt-6", reasoningLevel: "low", permissionMode: "auto" };
+  let spawned = 0;
+  const { bb, harness, store } = host(
+    { spawn: async () => ({ id: `thread-${++spawned}` }), wait: async () => { store.saveGuide("pr-1", guide("New retry behavior") as any); } },
+    { defaultExecutionOptions: async () => projectDefaults },
+  );
+  await generateGuide(bb, store, "pr-1", "p1");
+  const [writer, assistant] = harness.inspection.sdk.callsTo("threads.spawn").map(([args]) => args as any);
+  expect(writer.title).toBe("Generate guide: pr-1");
+  expect(assistant).toMatchObject({ title: "Review agent: pr-1", visibility: "hidden", providerId: "codex", model: "gpt-6", input: [{ type: "text", text: defaultPreferences.automaticReview }] });
+  expect(store.getAssistantThread("pr-1")).toBe("thread-2");
+  expect(store.getReview("pr-1")?.status).toBe("ready");
+
+  // The review now has a conversation, so the next guide leaves it alone.
+  await generateGuide(bb, store, "pr-1", "p1");
+  expect(harness.inspection.sdk.callsTo("threads.spawn").map(([args]) => (args as any).title)).toEqual(["Generate guide: pr-1", "Review agent: pr-1", "Generate guide: pr-1"]);
+});
+
+test("no automatic review for a blank prompt or a failed guide; one that can't start is logged", async () => {
+  const { bb, harness, store } = host({ wait: async () => {} }, { defaultExecutionOptions: async () => null });
+  await generateGuide(bb, store, "pr-1", "p1");
+  expect(store.getReview("pr-1")?.status).toBe("error");
+  store.savePreferences({ ...defaultPreferences, automaticReview: "  " }, 0);
+  await startAutomaticReview(bb, store, "pr-1");
+  expect(harness.inspection.sdk.callsTo("threads.spawn").map(([args]) => (args as any).title)).toEqual(["Generate guide: pr-1"]);
+
+  // Without a default agent, the guide is still ready and the reason is logged.
+  store.savePreferences({ ...defaultPreferences }, 1);
+  harness.inspection.sdk.stub("threads.wait", async () => { store.saveGuide("pr-1", guide("Retry") as any); return { matched: true }; });
+  await generateGuide(bb, store, "pr-1", "p1");
+  expect(store.getReview("pr-1")?.status).toBe("ready");
+  expect(harness.inspection.logEntries.map((entry) => entry.message)).toContainEqual(expect.stringContaining("automatic review of pr-1 didn't start"));
 });
 
 test("a finished guide restarts the review's idle assistant so it reads the new guide", async () => {

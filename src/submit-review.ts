@@ -1,13 +1,14 @@
 import { bindGhAccount } from "./gh-identity";
 import type { Store } from "./store";
 import { ghErrorMessage, ghPrHeadArgs, ghSubmitReviewArgs, type runGh } from "./gh";
-import { toGithubReviewPayload } from "./draft";
+import { sameComments, toGithubReviewPayload, type DraftComment } from "./draft";
 import { requireReviewRevision } from "./review-revision";
 import { invalidComments } from "./review-positions";
 
 export function createReviewSubmitter(store: Store, run: typeof runGh) {
   const inFlight = new Set<string>();
-  return async (targetKey: string, revision?: string, account?: string): Promise<{ ok: boolean; error?: string }> => {
+  /** `shown` is the list of comments the reviewer's page displays; the draft must still match it. */
+  return async (targetKey: string, revision?: string, account?: string, shown?: Pick<DraftComment, "file" | "line" | "side" | "body">[]): Promise<{ ok: boolean; error?: string }> => {
     if (inFlight.has(targetKey)) return { ok: false, error: "This review is already being submitted." };
     inFlight.add(targetKey);
     try {
@@ -18,6 +19,7 @@ export function createReviewSubmitter(store: Store, run: typeof runGh) {
       if (m.status === "generating") return { ok: false, error: "Wait for the review to finish generating before submitting." };
       if (!m.headSha) return { ok: false, error: "Re-review this PR before submitting so the reviewed revision can be verified." };
       const draft = store.getDraft(targetKey);
+      if (shown && !sameComments(draft.comments, shown)) return { ok: false, error: "Your draft comments changed since this page showed them, possibly from the assistant. Check them, then submit again." };
       if (draft.verdict === "COMMENT" && !draft.body.trim() && !draft.comments.length) return { ok: false, error: "Add a summary or at least one comment before submitting a Comment review." };
       if (draft.verdict === "REQUEST_CHANGES" && !draft.body.trim()) return { ok: false, error: "Add a summary explaining the requested changes before submitting." };
       if (draft.comments.some((c) => !c.body.trim())) return { ok: false, error: "Draft comments cannot be blank." };

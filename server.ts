@@ -13,6 +13,7 @@ import { runReviewCommand } from "./src/review-command";
 import { createPrReview } from "./src/start-review";
 import { assistantInstructions, getConversation, isAssistantAnswering, newConversation, refreshAssistants, startConversation } from "./src/agent";
 import { listMachines } from "./src/machines";
+import { addAgentComment } from "./src/agent-comments";
 import { isMissingThread } from "./src/thread-errors";
 import { computeFileViewState, hashForFile } from "./src/file-views";
 import {
@@ -252,10 +253,10 @@ export default async function plugin(bb: BbPluginApi) {
       requireReviewRevision(store, targetKey, revision);
       return { draft: store.setVerdict(targetKey, verdict, body) };
     },
-    async submitReview({ targetKey, revision, account }) {
+    async submitReview({ targetKey, revision, account, comments }) {
       if (!account) return { ok: false, error: "Verify your GitHub account before submitting. Reload this review to check access." };
       try { requireReviewRevision(store, targetKey, revision); } catch (error) { return { ok: false, error: (error as Error).message }; }
-      const result = await submitReview(targetKey, revision, account);
+      const result = await submitReview(targetKey, revision, account, comments);
       bb.realtime.publish(`review:${targetKey}`, { ts: Date.now() });
       bb.realtime.publish("reviews", { ts: Date.now() });
       return result;
@@ -340,6 +341,25 @@ export default async function plugin(bb: BbPluginApi) {
   });
 
   bb.agents.registerTool({
+    name: "add_draft_comment",
+    description: "Add an inline comment to the reviewer's local draft for this review, on one line of the current diff. Nothing reaches GitHub: the reviewer edits, removes, or submits it. Refuses a line that already has a draft comment.",
+    instructions: "Whenever a comment is warranted, such as a bug, a risk, a missing case, or a question about specific lines, add it with add_draft_comment on the line it concerns. Prefer this to a general remark, because an inline comment keeps the issue's location. Put one issue in each comment. Points about the change as a whole go in your reply. The draft is the reviewer's: they edit, remove, and submit it. Never post to GitHub yourself, for example with gh pr review, gh pr comment, gh api writes, or git push.",
+    parameters: z.object({
+      file: z.string().describe("Repo-relative path, exactly as the diff shows it."),
+      line: z.number().int().min(1).describe("The line's number in the new file (side RIGHT) or the old file (side LEFT)."),
+      side: z.enum(["RIGHT", "LEFT"]).optional().describe("RIGHT, the default, for an added or unchanged line; LEFT for a removed line."),
+      code: z.string().describe("The line's text, without the diff's leading +, -, or space. It must match the line."),
+      body: z.string().trim().min(1).describe("The comment, in GitHub Markdown."),
+    }),
+    async execute(input, { threadId }) {
+      const result = addAgentComment(store, threadId, input);
+      if (!result.ok) return { content: [{ type: "text", text: result.error }], isError: true };
+      bb.realtime.publish(`draft:${result.targetKey}`, {});
+      return result.text;
+    },
+  });
+
+  bb.agents.registerTool({
     name: "generate_review_guide",
     description: "Submit the authored guide. Validates shape and coverage.",
     parameters: z.object({ targetKey: z.string(), generationId: z.string(), guide: z.unknown() }),
@@ -373,13 +393,14 @@ export default async function plugin(bb: BbPluginApi) {
       return { tools: ["read_review_patch", "generate_review_guide"], skills: ["guided-review-generate"] };
     }
     // The review assistant can read any file's diff on demand, so the chat
-    // works across the whole review — but it never gets the guide-writing tool
-    // or the generation skill. Its review context arrives as instructions.
+    // works across the whole review, and add comments to its own review's
+    // local draft — but it never gets the guide-writing tool or the generation
+    // skill. Its review context arrives as instructions.
     if (title.startsWith("Review agent:")) {
       const { targetKey } = context.pluginMetadata;
       const review = typeof targetKey === "string" ? store.getReview(targetKey) : null;
       return {
-        tools: ["read_review_patch"], skills: [],
+        tools: ["read_review_patch", "add_draft_comment"], skills: [],
         ...(review ? { instructions: assistantInstructions(review.targetKey, store.getGuide(review.targetKey), store.getPreferences().preferences) } : {}),
       };
     }

@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useId, useRef, useState } from "react";
 import * as Tooltip from "@radix-ui/react-tooltip";
-import { useRpc } from "@get-bb/plugin-sdk/app";
+import { useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
 import { reviewState, type ReviewItem } from "../lib/review-state";
@@ -66,6 +66,7 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
   const summaryRecoveryId = useRef<string | undefined>(undefined);
   const composerRevision = useRef(reviewRevision);
   const summary = useRef({ verdict: "COMMENT" as Verdict, body: "", revision: 0, dirty: false });
+  const shownComments = useRef(draft.comments); shownComments.current = draft.comments;
 
   useEffect(() => {
     if (!loaded) return;
@@ -140,6 +141,11 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
     void load();
     return () => { mounted.current = false; void flush().catch(() => {}); };
   }, [load, flush]);
+  // The review assistant adds comments while the draft is open.
+  const refreshComments = useCallback(() => {
+    void enqueue(() => rpc.call("getDraft", { targetKey })).then((result) => updateComments(result.draft as Draft)).catch(() => {});
+  }, [enqueue, rpc, targetKey]);
+  useRealtime(`draft:${targetKey}`, refreshComments);
 
   useEffect(() => { if (!showComposer && !body.trim()) setFile(activeFiles[0] ?? ""); }, [activeFiles, showComposer, body]);
   useEffect(() => {
@@ -190,8 +196,8 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
     if (isLocal || !loaded || body.trim()) return;
     await mutate(async () => {
       await flush();
-      const result = await enqueue(() => rpc.call("submitReview", { targetKey, ...(reviewRevision ? { revision: reviewRevision } : {}), ...(account ? { account } : {}) }));
-      if (!result.ok) { setSaved(result.error ?? "Submit failed. Your draft is still here."); toast.error(result.error ?? "Submit failed. Your draft is still here."); return; }
+      const result = await enqueue(() => rpc.call("submitReview", { targetKey, ...(reviewRevision ? { revision: reviewRevision } : {}), ...(account ? { account } : {}), comments: shownComments.current }));
+      if (!result.ok) { setSaved(result.error ?? "Submit failed. Your draft is still here."); toast.error(result.error ?? "Submit failed. Your draft is still here."); refreshComments(); return; }
       setReceipt(summary.current.verdict);
       setWriteAnother(false);
       onSubmitted?.();

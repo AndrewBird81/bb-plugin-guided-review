@@ -2,10 +2,10 @@ import { splitPatchByFile } from "./patch";
 import type { DraftComment } from "./draft";
 
 export interface FilePositions {
-  /** New-file line numbers a RIGHT-side comment may target (added + context). */
-  right: Set<number>;
-  /** Old-file line numbers a LEFT-side comment may target (deleted + context). */
-  left: Set<number>;
+  /** New-file lines a RIGHT-side comment may target (added + context), by number, with their text. */
+  right: Map<number, string>;
+  /** Old-file lines a LEFT-side comment may target (deleted + context), by number, with their text. */
+  left: Map<number, string>;
 }
 
 // GitHub's review API rejects (422) any comment whose (path, line, side) is not
@@ -16,8 +16,8 @@ export function diffPositions(patch: string): Map<string, FilePositions> {
   const map = new Map<string, FilePositions>();
   for (const f of splitPatchByFile(patch)) {
     if (!f.path) continue;
-    const right = new Set<number>();
-    const left = new Set<number>();
+    const right = new Map<number, string>();
+    const left = new Map<number, string>();
     let oldLine = 0;
     let newLine = 0;
     for (const line of f.text.split("\n")) {
@@ -30,14 +30,14 @@ export function diffPositions(patch: string): Map<string, FilePositions> {
       if (/^(diff --git|index |--- |\+\+\+ )/.test(line)) continue;
       const c = line[0];
       if (c === "+") {
-        right.add(newLine);
+        right.set(newLine, line.slice(1));
         newLine++;
       } else if (c === "-") {
-        left.add(oldLine);
+        left.set(oldLine, line.slice(1));
         oldLine++;
       } else if (c === " ") {
-        right.add(newLine);
-        left.add(oldLine);
+        right.set(newLine, line.slice(1));
+        left.set(oldLine, line.slice(1));
         newLine++;
         oldLine++;
       }

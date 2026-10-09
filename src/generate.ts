@@ -2,7 +2,7 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Store } from "./store";
 import { completionNotifications } from "./completion-notifications";
 import { defaultPreferences, guidePreferencesPrompt, spawnExecution, type ReviewPreferences } from "./preferences";
-import { refreshAssistants } from "./agent";
+import { refreshAssistants, startAutomaticReview } from "./agent";
 import { agentPlacement, machineUnavailable } from "./machines";
 
 const active = new WeakMap<BbPluginApi, Set<AbortController>>();
@@ -71,6 +71,9 @@ export async function generateGuide(
     if (ok) void refreshAssistants(bb, store, [targetKey]);
     bb.realtime.publish(`review:${targetKey}`, { status: ok ? "ready" : "error" });
     bb.realtime.publish("reviews", { ts: Date.now() });
+    if (ok) await startAutomaticReview(bb, store, targetKey).catch((error) => {
+      bb.log.warn(`The automatic review of ${targetKey} didn't start: ${String(error)}`);
+    });
     if (!controller.signal.aborted) await completionNotifications(bb, store).queue({
       targetKey, generationId, projectId, status: ok ? "ready" : "error",
     });

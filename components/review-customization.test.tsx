@@ -273,3 +273,38 @@ test("a saved machine that was removed, or a machine list that won't load, is la
   expect(machine.selectedOptions[0].text).toBe("host_gone");
   slot.lifecycle.unmount();
 });
+
+test("the automatic review prompt starts from the default and can be turned off", async () => {
+  await loadPluginApp(() => import("../app"));
+  const { ReviewSettings } = await import("./ReviewSettings");
+  let record = { preferences: { ...defaultPreferences }, revision: 0 };
+  const save = vi.fn(async (input: any) => record = { ...input, revision: input.revision + 1 });
+  const slot = renderSlot({ component: ReviewSettings }, {}, { rpc: { setReviewPresence: () => ({ ok: true }), getPreferences: () => record, savePreferences: save } });
+  const prompt = await slot.findByRole("textbox", { name: "Automatic review" }) as HTMLTextAreaElement;
+  expect(prompt.value).toBe(defaultPreferences.automaticReview);
+  expect(prompt.value).toContain("add_draft_comment");
+  fireEvent.change(prompt, { target: { value: "" } });
+  fireEvent.click(slot.getByRole("button", { name: "Save settings" }));
+  await slot.findByText("Settings saved");
+  expect(record.preferences.automaticReview).toBe("");
+  slot.lifecycle.unmount();
+});
+
+test("an assistant's comment appears in an open draft, and Submit sends only the comments shown", async () => {
+  await loadPluginApp(() => import("../app"));
+  const { DraftTray } = await import("./DraftTray");
+  const mine = { file: "a.ts", line: 1, side: "RIGHT", body: "My comment", chapterId: "c1" };
+  const theirs = { file: "a.ts", line: 2, side: "RIGHT", body: "The assistant's comment" };
+  const stored = { targetKey: "live", verdict: "COMMENT", body: "", comments: [mine] as any[] };
+  const submitReview = vi.fn(() => ({ ok: false, error: "Not now" }));
+  const slot = renderSlot({ component: (props: any) => <DraftTray {...props} /> }, { targetKey: "live", activeChapterId: "c1", activeFiles: ["a.ts"], reviewRevision: "r1", account: "reviewer" }, { rpc: {
+    setReviewPresence: () => ({ ok: true }), getReviewerNotes: () => ({ body: "", revision: 0 }), getDraft: () => ({ draft: structuredClone(stored) }), submitReview,
+  } });
+  await slot.findByText("My comment");
+  stored.comments.push(theirs);
+  await slot.emitRealtime("draft:live", {});
+  await slot.findByText("The assistant's comment");
+  fireEvent.click(slot.getByRole("button", { name: "Submit to GitHub" }));
+  await waitFor(() => expect(submitReview).toHaveBeenCalledWith({ targetKey: "live", revision: "r1", account: "reviewer", comments: [mine, theirs] }));
+  slot.lifecycle.unmount();
+});

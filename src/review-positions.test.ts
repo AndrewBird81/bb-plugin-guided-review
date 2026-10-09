@@ -14,10 +14,10 @@ const patch = [
   "",
 ].join("\n");
 
-test("diffPositions enumerates valid right/left lines", () => {
+test("diffPositions enumerates valid right/left lines with their text", () => {
   const p = diffPositions(patch).get("x.ts")!;
-  expect([...p.right].sort((a, b) => a - b)).toEqual([1, 2, 3, 4]);
-  expect([...p.left].sort((a, b) => a - b)).toEqual([1, 2, 3]);
+  expect([...p.right].sort(([a], [b]) => a - b)).toEqual([[1, "a"], [2, "b2"], [3, "c"], [4, "d"]]);
+  expect([...p.left].sort(([a], [b]) => a - b)).toEqual([[1, "a"], [2, "b"], [3, "d"]]);
 });
 
 test("a RIGHT comment on an added line is valid", () => {

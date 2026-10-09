@@ -71,6 +71,16 @@ test("re-review cannot silently reuse comments whose line still exists in a chan
   expect(run).not.toHaveBeenCalled();
 });
 
+test("submission refuses draft comments the reviewer's page hasn't shown", async () => {
+  const { store, run, submit } = setup();
+  const shown = store.getDraft("pr-test").comments;
+  store.upsertDraftComment("pr-test", { file: "a.ts", line: 1, side: "LEFT", body: "Added by the assistant" });
+  expect(await submit("pr-test", undefined, undefined, shown)).toMatchObject({ ok: false, error: expect.stringContaining("changed since this page showed them") });
+  expect(run).not.toHaveBeenCalled();
+  expect(store.getDraft("pr-test").comments).toHaveLength(2);
+  expect(await submit("pr-test", undefined, undefined, store.getDraft("pr-test").comments)).toEqual({ ok: true });
+});
+
 test("local refs never submit to GitHub", async () => {
   const { store, run, submit } = setup();
   store.saveReview({ targetKey: "local", kind: "ref", gitRef: "HEAD", status: "ready", createdAt: 1 });

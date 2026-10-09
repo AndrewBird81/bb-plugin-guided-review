@@ -15,6 +15,12 @@ export interface Draft {
   comments: DraftComment[];
 }
 
+/** Whether two lists hold the same comments, in the same order. */
+export function sameComments(a: readonly DraftComment[], b: readonly Pick<DraftComment, "file" | "line" | "side" | "body">[]): boolean {
+  const key = (c: Pick<DraftComment, "file" | "line" | "side" | "body">) => JSON.stringify([c.file, c.line, c.side, c.body]);
+  return a.length === b.length && a.every((c, i) => key(c) === key(b[i]));
+}
+
 export function toGithubReviewPayload(draft: Draft): {
   event: Verdict;
   body: string;

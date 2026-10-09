@@ -64,7 +64,7 @@ test("agent selections default to project defaults, persist, and validate", asyn
   bb.storage.database().prepare(`INSERT INTO review_preferences (id,value,revision) VALUES (1,?,1)`)
     .run(JSON.stringify({ guideDetail: "detailed", guideInstructions: "", assistantInstructions: "", diffLayout: "split" }));
   const initial = await harness.behavior.callRpc("getPreferences", null) as any;
-  expect(initial.preferences).toMatchObject({ guideDetail: "detailed", guideAgent: null, assistantAgent: null });
+  expect(initial.preferences).toMatchObject({ guideDetail: "detailed", guideAgent: null, assistantAgent: null, automaticReview: defaultPreferences.automaticReview });
   const preferences = { ...initial.preferences, guideAgent: codex, assistantAgent: claude };
   await harness.behavior.callRpc("savePreferences", { preferences, revision: 1 });
   expect(createStore(bb).getPreferences().preferences).toEqual(preferences);

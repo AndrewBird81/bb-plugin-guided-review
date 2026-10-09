@@ -107,7 +107,14 @@ export const rpcContract = defineRpcContract({
       .strict(),
     output: z.object({ draft: z.any() }),
   },
-  submitReview: { input: z.object({ targetKey: z.string(), revision: z.string().optional(), account: z.string().optional() }).strict(), output: z.object({ ok: z.boolean(), error: z.string().optional() }) },
+  submitReview: {
+    input: z.object({
+      targetKey: z.string(), revision: z.string().optional(), account: z.string().optional(),
+      // The comments the page shows; submission refuses a draft that no longer matches.
+      comments: z.array(z.object({ file: z.string(), line: z.number().int(), side: z.enum(["LEFT", "RIGHT"]), body: z.string() })).optional(),
+    }).strict(),
+    output: z.object({ ok: z.boolean(), error: z.string().optional() }),
+  },
 
   // Feature 1: per-file "Viewed" state
   getFileViews: {

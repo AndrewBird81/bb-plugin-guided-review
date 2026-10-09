@@ -17,6 +17,7 @@ export const preferencesSchema = z.object({
   guideDetail: z.enum(["concise", "standard", "detailed"]),
   guideInstructions: z.string().max(12000),
   assistantInstructions: z.string().max(12000),
+  automaticReview: z.string().max(12000),
   diffLayout: z.enum(["split", "unified"]),
   guideAgent: agentExecutionSchema.nullable(),
   assistantAgent: agentExecutionSchema.nullable(),
@@ -58,5 +59,5 @@ export function guidePreferencesPrompt(preferences: ReviewPreferences): string {
 }
 
 export function assistantPreferencesPrompt(preferences: ReviewPreferences): string {
-  return `Current reviewer preferences (replace any earlier preferences):\n${preferences.assistantInstructions.trim() || "Answer concisely, ground claims in the diff, and explain uncertainty."}\nDo not publish reviews or comments, modify code, or include private reviewer notes. The reviewer submits feedback through the review panel.`;
+  return `Current reviewer preferences (replace any earlier preferences):\n${preferences.assistantInstructions.trim() || "Answer concisely, ground claims in the diff, and explain uncertainty. Keep draft comments terse and skip nitpicks."}\nNever post to GitHub, modify code, or include private reviewer notes. Put line feedback in the reviewer's draft with add_draft_comment; only the reviewer submits it.`;
 }

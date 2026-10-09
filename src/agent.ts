@@ -95,6 +95,20 @@ export async function startConversation(bb: BbPluginApi, store: Store, args: { t
   return { threadId: worker.id };
 }
 
+/**
+ * Once a guide is ready, a review without a conversation starts one with the
+ * reviewer's automatic review prompt, on the agent a new conversation defaults
+ * to. A blank prompt turns this off.
+ */
+export async function startAutomaticReview(bb: BbPluginApi, store: Store, targetKey: string): Promise<void> {
+  const text = store.getPreferences().preferences.automaticReview.trim();
+  if (!text) return;
+  const { threadId, defaults } = await getConversation(bb, store, targetKey);
+  if (threadId) return;
+  if (!defaults) throw new Error("bb has no default agent for the review's project.");
+  await startConversation(bb, store, { targetKey, text, agent: defaults });
+}
+
 /** Archive the review's conversation so the next message starts a fresh one. */
 export async function newConversation(bb: BbPluginApi, store: Store, targetKey: string): Promise<void> {
   const workers = [store.getAssistantThread(targetKey), store.getAgentThread(targetKey)];
