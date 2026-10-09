@@ -5,6 +5,7 @@ import { ensureGitHeaders } from "./patch";
 import { generateGuide, guideWriterUnavailable } from "./generate";
 import { readPrSnapshot } from "./pr-snapshot";
 import { resolve } from "node:path";
+import { existsSync } from "node:fs";
 import {
   ghRepoViewArgs, gitDiffArgs, ghErrorMessage,
 } from "./gh";
@@ -16,17 +17,29 @@ interface Deps {
 }
 interface Ctx { projectId?: string; threadId?: string; cwd?: string }
 
-const USAGE = "usage: bb review <pr-url | pr-number | git-ref> [--base <ref>]\n       bb review comment <list | add | edit | delete> …   (see bb review comment --help)";
+const USAGE = [
+  "usage: bb review <pr-url | pr-number | git-ref> [--base <ref>] [--context <text>]",
+  "       bb review comment <list | add | edit | delete> …   (see bb review comment --help)",
+  "",
+  "  --context  text for the assistant's automatic review, such as the ticket the change implements. It's kept with the review; '' removes it.",
+].join("\n");
+const CONTEXT_LIMIT = 12_000;
 
 export async function runReviewCommand(deps: Deps, argv: string[], ctx: Ctx) {
   let input: string | undefined;
   let base: string | undefined;
+  let context: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const value = argv[i];
     if (value === "--help" || value === "-h") return { exitCode: 0, stdout: USAGE };
     if (value === "--base") {
       if (base || !argv[i + 1] || argv[i + 1].startsWith("-")) return { exitCode: 2, stderr: "--base requires a git ref." };
       base = argv[++i];
+    } else if (value === "--context") {
+      // Any text, including text that starts with "-", such as a bulleted list.
+      if (context !== undefined || i + 1 >= argv.length) return { exitCode: 2, stderr: "--context requires text, given once. Pass '' to remove a review's context." };
+      context = argv[++i];
+      if (context.length > CONTEXT_LIMIT) return { exitCode: 2, stderr: "--context is limited to 12,000 characters." };
     } else if (value.startsWith("-") || input) {
       return { exitCode: 2, stderr: `Unexpected argument: ${value}` };
     } else input = value;
@@ -35,7 +48,11 @@ export async function runReviewCommand(deps: Deps, argv: string[], ctx: Ctx) {
   if (!ctx.projectId) return { exitCode: 2, stderr: "Run `bb review` inside a project thread." };
   const target = parseTarget(input, base);
   if (target.kind === "pr" && base) return { exitCode: 2, stderr: "--base is only supported for local git refs." };
-  if ((target.kind === "ref" || !target.repo) && !ctx.cwd) return { exitCode: 2, stderr: "A local ref or PR number needs a working directory. Run `bb review` in the repository." };
+  if (target.kind === "ref" || !target.repo) {
+    if (!ctx.cwd) return { exitCode: 2, stderr: "A local ref or PR number needs a working directory. Run `bb review` in the repository." };
+    // The caller's directory may be on another machine; git and gh run on the bb server.
+    if (!existsSync(resolve(ctx.cwd))) return { exitCode: 2, stderr: `A local ref or PR number needs a checkout on the bb server, and ${ctx.cwd} isn't on it. Pass the PR's URL instead, or run \`bb review\` in a checkout on the server.` };
+  }
   const unavailable = await guideWriterUnavailable(deps.bb, deps.store);
   if (unavailable) return { exitCode: 1, stderr: unavailable };
   const cwd = ctx.cwd ? resolve(ctx.cwd) : undefined;
@@ -63,7 +80,8 @@ export async function runReviewCommand(deps: Deps, argv: string[], ctx: Ctx) {
     meta.targetKey = key;
     let snapshot: Awaited<ReturnType<typeof readPrSnapshot>>;
     try {
-      snapshot = await readPrSnapshot(deps.gh.runGh, target.number, repo, cwd);
+      // The repo is known, so gh needs no checkout. The caller's directory may be on another machine.
+      snapshot = await readPrSnapshot(deps.gh.runGh, target.number, repo);
     } catch (error) {
       return { exitCode: 1, stderr: error instanceof Error ? error.message : "Could not load the PR." };
     }
@@ -87,11 +105,16 @@ export async function runReviewCommand(deps: Deps, argv: string[], ctx: Ctx) {
   deps.store.saveReview(meta);
   deps.store.savePatch(key, ensureGitHeaders(patch));
 
+  if (context !== undefined) deps.store.setReviewContext(key, context.trim() || null);
+
   // Fire-and-forget generation; the panel refetches on the realtime signal.
   void generateGuide(deps.bb, deps.store, key, ctx.projectId);
 
-  return {
-    exitCode: 0,
-    stdout: `Guided Review started for ${key}. Open the Guided Review panel to watch it build and review.`,
-  };
+  const lines = [`Guided Review started for ${key}. Open the Guided Review panel to watch it build and review.`];
+  if (context !== undefined && !context.trim()) lines.push("Removed the review's context.");
+  else if (context !== undefined) lines.push(
+    !deps.store.getPreferences().preferences.automaticReview.trim() ? "Automatic review is off in Review settings, so no assistant gets this context."
+    : deps.store.getAssistantThread(key) ? "This review already has an assistant conversation, so the automatic review won't run and won't see this context. Paste it into Ask agent instead."
+    : "The assistant's automatic review will include this context.");
+  return { exitCode: 0, stdout: lines.join("\n") };
 }

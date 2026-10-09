@@ -174,6 +174,17 @@ test("a ready guide starts the automatic review when the review has no conversat
   expect(harness.inspection.sdk.callsTo("threads.spawn").map(([args]) => (args as any).title)).toEqual(["Generate guide: pr-1", "Review agent: pr-1", "Generate guide: pr-1"]);
 });
 
+test("the automatic review carries the context bb review --context kept with the review", async () => {
+  const { bb, harness, store } = host(
+    { wait: async () => { store.saveGuide("pr-1", guide("Retry") as any); } },
+    { defaultExecutionOptions: async () => ({ providerId: "codex", model: "gpt-6", reasoningLevel: "low", permissionMode: "auto" }) },
+  );
+  store.setReviewContext("pr-1", "Implements LIN-42: retry once, never twice.");
+  await generateGuide(bb, store, "pr-1", "p1");
+  const assistant = harness.inspection.sdk.callsTo("threads.spawn").map(([args]) => args as any).find((args) => args.title === "Review agent: pr-1");
+  expect(assistant.input).toEqual([{ type: "text", mentions: [], text: `${defaultPreferences.automaticReview}\n\nContext from the thread that started this review:\nImplements LIN-42: retry once, never twice.` }]);
+});
+
 test("no automatic review for a blank prompt or a failed guide; one that can't start is logged", async () => {
   const { bb, harness, store } = host({ wait: async () => {} }, { defaultExecutionOptions: async () => null });
   await generateGuide(bb, store, "pr-1", "p1");

@@ -68,6 +68,10 @@ export interface Store {
   listReviews(): ReviewMeta[];
   setStatus(targetKey: string, status: ReviewMeta["status"]): void;
   setLifecycle(targetKey: string, state: ReviewLifecycle): void;
+  /** Context for the assistant's automatic review, from `bb review --context`. */
+  getReviewContext(targetKey: string): string | null;
+  /** null removes it. */
+  setReviewContext(targetKey: string, text: string | null): void;
   /** Remove the review and everything stored for it. */
   deleteReview(targetKey: string): void;
   savePatch(targetKey: string, patch: string): void;
@@ -133,6 +137,7 @@ export function createStore(bb: BbPluginApi): Store {
     `CREATE TABLE IF NOT EXISTS review_preferences (id INTEGER PRIMARY KEY CHECK (id=1), value TEXT NOT NULL, revision INTEGER NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS reviewer_notes (target_key TEXT PRIMARY KEY, body TEXT NOT NULL, revision INTEGER NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS assistant_threads (target_key TEXT PRIMARY KEY, thread_id TEXT NOT NULL, created_at INTEGER NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS review_context (target_key TEXT PRIMARY KEY, text TEXT NOT NULL)`,
   ]);
 
   const rowToMeta = (r: any): ReviewMeta => ({
@@ -197,6 +202,13 @@ export function createStore(bb: BbPluginApi): Store {
       const previous = JSON.parse((db.prepare(`SELECT state FROM review_lifecycle WHERE target_key=?`).get(k) as any)?.state ?? "{}");
       db.prepare(`INSERT INTO review_lifecycle VALUES (?,?) ON CONFLICT(target_key) DO UPDATE SET state=excluded.state`)
         .run(k, JSON.stringify({ ...previous, ...state }));
+    },
+    getReviewContext(k) {
+      return (db.prepare(`SELECT text FROM review_context WHERE target_key=?`).get(k) as { text: string } | undefined)?.text ?? null;
+    },
+    setReviewContext(k, text) {
+      if (text === null) db.prepare(`DELETE FROM review_context WHERE target_key=?`).run(k);
+      else db.prepare(`INSERT INTO review_context VALUES (?,?) ON CONFLICT(target_key) DO UPDATE SET text=excluded.text`).run(k, text);
     },
     deleteReview(k) {
       db.transaction(() => {
@@ -360,7 +372,7 @@ export function createStore(bb: BbPluginApi): Store {
 // Every table keyed by target_key. A new per-review table belongs here too.
 const REVIEW_TABLES = [
   "reviews", "patches", "guides", "drafts", "file_views", "agent_threads", "agent_messages",
-  "generations", "draft_comment_revisions", "review_lifecycle", "reviewer_notes", "assistant_threads",
+  "generations", "draft_comment_revisions", "review_lifecycle", "reviewer_notes", "assistant_threads", "review_context",
 ] as const;
 
 function patchHash(patch: string) { return createHash("sha256").update(patch).digest("hex"); }

@@ -439,7 +439,7 @@ export default async function plugin(bb: BbPluginApi) {
     summary: "Open a Guided Review of a GitHub PR or local git ref, or change its local draft comments",
     rendersHelp: true,
     commands: [
-      { name: "review", summary: "Review a PR or ref", usage: "bb review <pr-url | pr-number | git-ref> [--base <ref>]" },
+      { name: "review", summary: "Review a PR or ref", usage: "bb review <pr-url | pr-number | git-ref> [--base <ref>] [--context <text>]" },
       { name: "comment", summary: "List, add, edit, or delete a review's local draft comments; never posts to GitHub", usage: "bb review comment <list | add | edit | delete> <review> [<file>:<line>] [--side LEFT|RIGHT] [--code <text>] [--body <text>] [--json]" },
     ],
     async run(argv, ctx) {

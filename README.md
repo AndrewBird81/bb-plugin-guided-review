@@ -42,16 +42,19 @@ An interrupted browser connection can leave an editing session protected. If the
 
 ## Local changes and the command line
 
-Run commands from a project checkout available on the BB server:
+Run `bb review` in a BB thread. A PR URL works from a thread on any machine; a PR number or a local ref needs a project checkout on the BB server:
 
 ```sh
 bb review https://github.com/acme/web/pull/42
 bb review 42                           # PR in the current repository
 bb review origin/main...HEAD           # local range
 bb review my-feature --base main       # branch against main
+bb review https://github.com/acme/web/pull/42 --context 'Implements LIN-123: retry once, never twice.'
 ```
 
 The checkout for a local review must exist on the BB server. A checkout only present on another enrolled machine is not supported by this release. Local reviews retain notes in BB and do not offer GitHub submission.
+
+`--context` adds text, such as the ticket a PR implements, to the assistant's automatic review. It's kept with the review: running `bb review` again without it keeps it, and `--context ''` removes it. It reaches only the automatic review, which runs when a guide is ready and the review has no conversation yet; the command says when it won't.
 
 Other BB threads and scripts can work with a review's draft comments. These commands change only the local draft; nothing is posted to GitHub until you submit:
 

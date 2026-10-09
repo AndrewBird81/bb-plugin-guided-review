@@ -86,6 +86,7 @@ test("deleteReview clears every per-review table and leaves other reviews intact
     bb.storage.database().prepare(`INSERT INTO agent_messages (target_key,role,text,context,created_at) VALUES (?,'user','question',NULL,1)`).run(key);
     s.setLifecycle(key, { userArchivedAt: 1 });
     s.saveReviewerNotes(key, "private", 0);
+    s.setReviewContext(key, "Implements LIN-1");
   }
   s.deleteReview("pr-1");
 
