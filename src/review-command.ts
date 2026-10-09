@@ -2,7 +2,7 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Store } from "./store";
 import { parseTarget, targetKey } from "./targets";
 import { ensureGitHeaders } from "./patch";
-import { generateGuide } from "./generate";
+import { generateGuide, guideWriterUnavailable } from "./generate";
 import { readPrSnapshot } from "./pr-snapshot";
 import { resolve } from "node:path";
 import {
@@ -33,6 +33,8 @@ export async function runReviewCommand(deps: Deps, argv: string[], ctx: Ctx) {
   const target = parseTarget(input, base);
   if (target.kind === "pr" && base) return { exitCode: 2, stderr: "--base is only supported for local git refs." };
   if ((target.kind === "ref" || !target.repo) && !ctx.cwd) return { exitCode: 2, stderr: "A local ref or PR number needs a working directory. Run `bb review` in the repository." };
+  const unavailable = await guideWriterUnavailable(deps.bb, deps.store);
+  if (unavailable) return { exitCode: 1, stderr: unavailable };
   const cwd = ctx.cwd ? resolve(ctx.cwd) : undefined;
   let key = targetKey(target, cwd ? { projectId: ctx.projectId, cwd } : undefined);
   const now = Date.now();

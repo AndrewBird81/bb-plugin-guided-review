@@ -3,11 +3,17 @@ import type { Store } from "./store";
 import { completionNotifications } from "./completion-notifications";
 import { defaultPreferences, guidePreferencesPrompt, spawnExecution, type ReviewPreferences } from "./preferences";
 import { refreshAssistants } from "./agent";
+import { agentPlacement, machineUnavailable } from "./machines";
 
 const active = new WeakMap<BbPluginApi, Set<AbortController>>();
 export function hasGuideGenerations(bb: BbPluginApi) { return (active.get(bb)?.size ?? 0) > 0; }
 export function stopGuideGenerations(bb: BbPluginApi) {
   for (const controller of active.get(bb) ?? []) controller.abort();
+}
+
+/** Why a guide can't start now: the guide writer's machine is offline or removed. */
+export function guideWriterUnavailable(bb: BbPluginApi, store: Store): Promise<string | null> {
+  return machineUnavailable(bb, store.getPreferences().preferences.guideAgent, "guide writer");
 }
 
 export function buildGenerationPrompt(targetKey: string, generationId?: string, preferences: ReviewPreferences = defaultPreferences): string {
@@ -39,8 +45,7 @@ export async function generateGuide(
     threads = bb.sdk.threads;
     const preferences = store.getPreferences().preferences;
     const worker = await threads.spawn({
-      projectId,
-      environment: { type: "project-default" },
+      ...(await agentPlacement(bb, preferences.guideAgent, projectId)),
       prompt: buildGenerationPrompt(targetKey, generationId, preferences),
       title: `Generate guide: ${targetKey}`,
       visibility: "hidden",

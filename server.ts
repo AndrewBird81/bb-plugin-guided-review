@@ -12,6 +12,7 @@ import { validateGuide, checkCoverage } from "./src/guide";
 import { runReviewCommand } from "./src/review-command";
 import { createPrReview } from "./src/start-review";
 import { assistantInstructions, getConversation, isAssistantAnswering, newConversation, refreshAssistants, startConversation } from "./src/agent";
+import { listMachines } from "./src/machines";
 import { isMissingThread } from "./src/thread-errors";
 import { computeFileViewState, hashForFile } from "./src/file-views";
 import {
@@ -99,6 +100,9 @@ export default async function plugin(bb: BbPluginApi) {
       } catch {
         return { defaults: null };
       }
+    },
+    async listMachines() {
+      return { machines: await listMachines(bb) };
     },
     getReviewerNotes({ targetKey }) { return store.getReviewerNotes(targetKey); },
     saveReviewerNotes({ targetKey, body, revision }) { return store.saveReviewerNotes(targetKey, body, revision); },

@@ -2,6 +2,8 @@
 
 /** A custom agent selection, in bb's terms. Service tiers are provider-defined ids. */
 export interface AgentExecution {
+  /** The machine the agent runs on; absent runs it on the bb server. */
+  hostId?: string;
   providerId: string;
   model: string;
   reasoningLevel: "none" | "low" | "medium" | "high" | "xhigh" | "ultracode" | "max" | "ultra";

@@ -16,6 +16,7 @@ vi.mock("./gh", async (orig) => {
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import { createStore } from "./store";
 import { rerunReview } from "./rereview";
+import { defaultPreferences } from "./preferences";
 import * as gh from "./gh";
 
 function host() {
@@ -77,4 +78,15 @@ test("rerunReview fails for an unknown target", async () => {
   const store = createStore(bb);
   const res = await rerunReview({ bb, store, gh }, "missing");
   expect(res.ok).toBe(false);
+});
+
+test("rerunReview leaves the review as it was when the guide writer's machine is offline", async () => {
+  const { bb } = createFakePluginHost({ pluginId: "guided-review", sdk: { hosts: { get: async () => ({ id: "host_flomac", name: "FloMac", status: "disconnected", lifecycle: { phase: "active" } }) } } });
+  const store = createStore(bb);
+  store.saveReview({ targetKey: "pr-7", kind: "pr", number: 7, repo: "acme/web", status: "ready", createdAt: 1, projectId: "p1", headSha: "oldsha", gitRef: "main...feature" });
+  store.savePatch("pr-7", "stale patch");
+  store.savePreferences({ ...defaultPreferences, guideAgent: { hostId: "host_flomac", providerId: "codex", model: "gpt-6", reasoningLevel: "low", permissionMode: "auto" } }, 0);
+  expect(await rerunReview({ bb, store, gh }, "pr-7")).toEqual({ ok: false, error: "FloMac is offline. Wake it, or choose another machine for the guide writer in Review settings." });
+  expect(store.getReview("pr-7")).toMatchObject({ status: "ready", headSha: "oldsha" });
+  expect(store.readPatch("pr-7").text).toBe("stale patch");
 });

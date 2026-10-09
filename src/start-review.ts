@@ -2,7 +2,7 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Store } from "./store";
 import { parseTarget, targetKey } from "./targets";
 import { ensureGitHeaders } from "./patch";
-import { generateGuide } from "./generate";
+import { generateGuide, guideWriterUnavailable } from "./generate";
 import { readPrSnapshot } from "./pr-snapshot";
 
 interface Deps {
@@ -28,6 +28,9 @@ export async function createPrReview(
         "Paste a full GitHub PR URL (github.com/owner/repo/pull/N). For a PR number or local ref, run `bb review` in a terminal.",
     };
   }
+
+  const unavailable = await guideWriterUnavailable(deps.bb, deps.store);
+  if (unavailable) return { ok: false, error: unavailable };
 
   let snapshot: Awaited<ReturnType<typeof readPrSnapshot>>;
   try {

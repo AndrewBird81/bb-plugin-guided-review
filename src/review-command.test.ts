@@ -17,6 +17,7 @@ vi.mock("./gh", async (orig) => {
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import { createStore } from "./store";
 import { runReviewCommand } from "./review-command";
+import { defaultPreferences } from "./preferences";
 import * as gh from "./gh";
 import { targetKey } from "./targets";
 const key = targetKey({ kind: "pr", number: 7, repo: "acme/web" });
@@ -32,4 +33,13 @@ test("bb review <number> fetches, stores patch+meta, and kicks generation", asyn
   const meta = store.getReview(key);
   expect(meta?.repo).toBe("acme/web");
   expect(store.readPatch(key).text).toContain("diff --git a/a.ts");
+});
+
+test("bb review reports an offline guide writer machine without starting a review", async () => {
+  const { bb } = createFakePluginHost({ pluginId: "guided-review", sdk: { hosts: { get: async () => ({ id: "host_flomac", name: "FloMac", status: "disconnected", lifecycle: { phase: "active" } }) } } });
+  const store = createStore(bb);
+  store.savePreferences({ ...defaultPreferences, guideAgent: { hostId: "host_flomac", providerId: "codex", model: "gpt-6", reasoningLevel: "low", permissionMode: "auto" } }, 0);
+  expect(await runReviewCommand({ bb, store, gh }, ["7"], { projectId: "p1", cwd: "/repo" }))
+    .toEqual({ exitCode: 1, stderr: "FloMac is offline. Wake it, or choose another machine for the guide writer in Review settings." });
+  expect(store.getReview(key)).toBeNull();
 });

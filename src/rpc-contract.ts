@@ -29,6 +29,10 @@ export const rpcContract = defineRpcContract({
   },
   // Seeds a custom agent selection with the panel project's remembered defaults.
   getAgentDefaults: { input: z.null(), output: z.object({ defaults: agentExecutionSchema.nullable() }) },
+  listMachines: {
+    input: z.null(),
+    output: z.object({ machines: z.array(z.object({ hostId: z.string(), name: z.string(), connected: z.boolean(), server: z.boolean() })) }),
+  },
   getReviewerNotes: { input: targetKey, output: z.object({ body: z.string(), revision: z.number().int() }) },
   saveReviewerNotes: {
     input: z.object({ targetKey: z.string(), body: z.string().max(100000), revision: z.number().int().min(0) }).strict(),
@@ -120,7 +124,10 @@ export const rpcContract = defineRpcContract({
   // Review assistant: one hidden bb thread per review, shown with ThreadChat
   getConversation: {
     input: targetKey,
-    output: z.object({ threadId: z.string().nullable(), legacy: z.array(z.any()), defaults: agentChoiceSchema.nullable() }),
+    output: z.object({
+      threadId: z.string().nullable(), legacy: z.array(z.any()), defaults: agentChoiceSchema.nullable(),
+      machine: z.object({ name: z.string(), connected: z.boolean() }).nullable(),
+    }),
   },
   startConversation: {
     input: z.object({ targetKey: z.string(), text: z.string().min(1), agent: agentChoiceSchema }).strict(),

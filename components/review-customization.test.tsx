@@ -210,3 +210,66 @@ test("each agent uses project defaults until customized with bb's pickers", asyn
   await waitFor(() => expect(record.preferences.guideAgent).toBeNull());
   slot.lifecycle.unmount();
 });
+
+const listMachines = () => ({ machines: [
+  { hostId: "host_server", name: "bb-server-0", connected: true, server: true },
+  { hostId: "host_flomac", name: "FloMac", connected: true, server: false },
+  { hostId: "host_old", name: "FloMac Original", connected: false, server: false },
+] });
+
+test("a custom agent can run on another machine, with bb's pickers listing that machine's choices", async () => {
+  await loadPluginApp(() => import("../app"));
+  const { ReviewSettings } = await import("./ReviewSettings");
+  const codex = { providerId: "codex", model: "gpt-6-astra", reasoningLevel: "low", permissionMode: "auto" };
+  let record: any = { preferences: { ...defaultPreferences, guideAgent: codex }, revision: 0 };
+  const save = vi.fn(async (input: any) => record = { ...input, revision: input.revision + 1 });
+  const slot = renderSlot({ component: ReviewSettings }, {}, { rpc: { setReviewPresence: () => ({ ok: true }), getPreferences: () => record, savePreferences: save, listMachines } });
+  const machine = await slot.findByRole("combobox", { name: "Machine" }) as HTMLSelectElement;
+  await waitFor(() => expect(Array.from(machine.options).map((option) => option.text)).toEqual(["bb-server-0 (server)", "FloMac", "FloMac Original (offline)"]));
+  const picker = slot.getByTestId("bb-provider-model-picker");
+  expect(picker.dataset.routingKind).toBe("primary");
+
+  fireEvent.change(machine, { target: { value: "host_flomac" } });
+  for (const routed of [picker, slot.getByTestId("bb-permission-mode-picker")]) expect(routed.dataset).toMatchObject({ routingKind: "host", routingId: "host_flomac" });
+  fireEvent.change(within(picker).getByRole("textbox", { name: "Provider ID" }), { target: { value: "claude-code" } });
+  fireEvent.change(within(picker).getByRole("textbox", { name: "Model" }), { target: { value: "claude-opus-5-5" } });
+  fireEvent.click(within(picker).getByRole("button", { name: "Apply execution selection" }));
+  fireEvent.click(slot.getByRole("button", { name: "Save settings" }));
+  await slot.findByText("Settings saved");
+  const onFloMac = { hostId: "host_flomac", providerId: "claude-code", model: "claude-opus-5-5", reasoningLevel: "low", permissionMode: "auto" };
+  expect(record.preferences.guideAgent).toEqual(onFloMac);
+
+  // The server is stored as no machine.
+  fireEvent.change(slot.getByRole("combobox", { name: "Machine" }), { target: { value: "" } });
+  expect(slot.getByTestId("bb-provider-model-picker").dataset.routingKind).toBe("primary");
+  fireEvent.click(slot.getByRole("button", { name: "Save settings" }));
+  await waitFor(() => expect(record.preferences.guideAgent).toEqual({ ...onFloMac, hostId: undefined }));
+  expect(record.preferences.guideAgent).not.toHaveProperty("hostId");
+  slot.lifecycle.unmount();
+});
+
+test("a saved machine that was removed, or a machine list that won't load, is labeled", async () => {
+  await loadPluginApp(() => import("../app"));
+  const { ReviewSettings } = await import("./ReviewSettings");
+  const assistantAgent = { hostId: "host_gone", providerId: "codex", model: "gpt-6", reasoningLevel: "low", permissionMode: "auto" };
+  let record = { preferences: { ...defaultPreferences, assistantAgent }, revision: 1 };
+  const rpc = { setReviewPresence: () => ({ ok: true }), getPreferences: () => record, listMachines };
+  let slot = renderSlot({ component: ReviewSettings }, {}, { rpc });
+  let machine = await slot.findByRole("combobox", { name: "Machine" }) as HTMLSelectElement;
+  await waitFor(() => expect(machine.selectedOptions[0].text).toBe("Removed machine"));
+  slot.lifecycle.unmount();
+
+  // A machine that became the server, such as after a server move, shows as the server.
+  record = { preferences: { ...defaultPreferences, assistantAgent: { ...assistantAgent, hostId: "host_server" } }, revision: 1 };
+  slot = renderSlot({ component: ReviewSettings }, {}, { rpc });
+  machine = await slot.findByRole("combobox", { name: "Machine" }) as HTMLSelectElement;
+  await waitFor(() => expect(machine.selectedOptions[0].text).toBe("bb-server-0 (server)"));
+  slot.lifecycle.unmount();
+  record = { preferences: { ...defaultPreferences, assistantAgent }, revision: 1 };
+
+  slot = renderSlot({ component: ReviewSettings }, {}, { rpc: { ...rpc, listMachines: async () => { throw new Error("Offline"); } } });
+  await slot.findByText("Couldn’t load your machines. Reload this page to choose another machine.");
+  machine = slot.getByRole("combobox", { name: "Machine" }) as HTMLSelectElement;
+  expect(machine.selectedOptions[0].text).toBe("host_gone");
+  slot.lifecycle.unmount();
+});

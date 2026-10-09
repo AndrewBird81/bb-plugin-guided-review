@@ -1,7 +1,7 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Store } from "./store";
 import { ensureGitHeaders } from "./patch";
-import { generateGuide } from "./generate";
+import { generateGuide, guideWriterUnavailable } from "./generate";
 import { gitDiffArgs } from "./gh";
 import { readPrSnapshot } from "./pr-snapshot";
 
@@ -13,6 +13,8 @@ interface Deps {
 export async function rerunReview(deps: Deps, targetKey: string): Promise<{ ok: boolean; error?: string }> {
   const m = deps.store.getReview(targetKey);
   if (!m || !m.projectId) return { ok: false, error: "Unknown review or missing project." };
+  const unavailable = await guideWriterUnavailable(deps.bb, deps.store);
+  if (unavailable) return { ok: false, error: unavailable };
 
   let patch = "";
   if (m.kind === "pr" && m.number && m.repo) {

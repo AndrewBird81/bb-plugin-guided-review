@@ -119,3 +119,31 @@ test("a failed start keeps the question to try again", async () => {
   expect((screen.getByRole("textbox", { name: "Ask the agent" }) as HTMLTextAreaElement).value).toBe("A question");
   expect(screen.queryByTestId("bb-thread-chat")).toBeNull();
 });
+
+const onFloMac = (connected = true) => () => ({ threadId: null, legacy: [], defaults: { ...codex, hostId: "host_flomac" }, machine: { name: "FloMac", connected } });
+
+test("a new conversation starts on the assistant's chosen machine, choosing from its models", async () => {
+  const startConversation = vi.fn(async () => ({ threadId: "th-1" }));
+  await renderDock({}, { getConversation: onFloMac(), startConversation });
+  const picker = await screen.findByTestId("bb-provider-model-picker");
+  expect(picker.dataset).toMatchObject({ routingKind: "host", routingId: "host_flomac" });
+  expect(screen.getByText("on FloMac")).toBeTruthy();
+  fireEvent.change(within(picker).getByRole("textbox", { name: "Model" }), { target: { value: "gpt-6" } });
+  fireEvent.click(within(picker).getByRole("button", { name: "Apply execution selection" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Ask the agent" }), { target: { value: "Is this safe?" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await screen.findByTestId("bb-thread-chat");
+  expect(startConversation).toHaveBeenCalledExactlyOnceWith({ targetKey: "pr-1", text: "Is this safe?", agent: { ...codex, model: "gpt-6", hostId: "host_flomac" } });
+});
+
+test("an offline machine is named, and a refused first message stays in the composer", async () => {
+  const startConversation = vi.fn(async () => { throw new Error("FloMac is offline. Wake it, or choose another machine for the review assistant in Review settings."); });
+  await renderDock({}, { getConversation: onFloMac(false), startConversation });
+  await screen.findByText("FloMac is offline");
+  fireEvent.change(screen.getByRole("textbox", { name: "Ask the agent" }), { target: { value: "Is this safe?" } });
+  fireEvent.click(screen.getByRole("button", { name: "Send" }));
+  await waitFor(() => expect(startConversation).toHaveBeenCalledOnce());
+  await waitFor(() => expect((screen.getByRole("textbox", { name: "Ask the agent" }) as HTMLTextAreaElement).disabled).toBe(false));
+  expect((screen.getByRole("textbox", { name: "Ask the agent" }) as HTMLTextAreaElement).value).toBe("Is this safe?");
+  expect(screen.queryByTestId("bb-thread-chat")).toBeNull();
+});

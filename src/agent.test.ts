@@ -70,10 +70,10 @@ test("a live thread continues; otherwise the conversation starts from the Settin
   const projectDefaults = { providerId: "codex", model: "gpt-6-astra", reasoningLevel: "low", permissionMode: "auto", serviceTier: "default" };
   const { bb, harness, store } = host({}, { defaultExecutionOptions: async ({ projectId }: { projectId: string }) => projectId === "p1" ? projectDefaults : null });
   store.setAssistantThread("pr-1", "worker");
-  expect(await getConversation(bb, store, "pr-1")).toEqual({ threadId: "worker", legacy: [], defaults: null });
+  expect(await getConversation(bb, store, "pr-1")).toEqual({ threadId: "worker", legacy: [], defaults: null, machine: null });
 
   harness.inspection.sdk.stub("threads.get", async () => ({ archivedAt: 123, deletedAt: null }));
-  expect(await getConversation(bb, store, "pr-1")).toEqual({ threadId: null, legacy: [], defaults: { providerId: "codex", model: "gpt-6-astra", reasoningLevel: "low", serviceTier: "default" } });
+  expect(await getConversation(bb, store, "pr-1")).toEqual({ threadId: null, legacy: [], defaults: { providerId: "codex", model: "gpt-6-astra", reasoningLevel: "low", serviceTier: "default" }, machine: null });
   expect(store.getAssistantThread("pr-1")).toBeNull();
 
   store.savePreferences({ ...defaultPreferences, assistantAgent: { ...opus, permissionMode: "full" } }, 0);

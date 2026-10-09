@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRpc, useBbNavigate, experimental_PermissionModePicker as PermissionModePicker, experimental_ProviderModelPicker as ProviderModelPicker } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../src/rpc-contract";
 import type { PreferencesRecord } from "../src/preferences";
+import type { Machine } from "../src/machines";
 import { defaultPreferences, type AgentExecution } from "../lib/review-preferences";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
@@ -10,11 +11,32 @@ import { ReleaseSettings, SetupReadiness } from "./ReleaseSettings";
 import { Icon } from "./ui/icon";
 
 type AgentUpdate = (agent: AgentExecution | null) => AgentExecution | null;
+/** undefined while loading; null when they couldn't be loaded. */
+type Machines = readonly Machine[] | null | undefined;
 
-function AgentSelection({ label, agent, disabled, note, onCustomize, onChange }: {
-  label: string; agent: AgentExecution | null; disabled: boolean; note?: string;
+/** The bb server is the default machine, stored as no machine so the choice follows a server move. */
+function MachineSelect({ hostId, machines, disabled, onChange }: {
+  hostId?: string; machines: Machines; disabled: boolean; onChange(hostId: string | undefined): void;
+}) {
+  const server = machines?.find((machine) => machine.server);
+  const others = machines?.filter((machine) => !machine.server) ?? [];
+  const value = hostId && hostId !== server?.hostId ? hostId : "";
+  return <label className="flex min-w-0 items-center gap-2 text-sm">
+    <span className="text-muted-foreground">Machine</span>
+    <select aria-label="Machine" disabled={disabled} value={value} onChange={(event) => onChange(event.target.value || undefined)} className="h-8 min-w-0 rounded-md border border-border bg-background px-2 text-sm text-foreground">
+      <option value="">{server ? `${server.name} (server)` : "bb server"}</option>
+      {others.map((machine) => <option key={machine.hostId} value={machine.hostId}>{machine.connected ? machine.name : `${machine.name} (offline)`}</option>)}
+      {value && !others.some((machine) => machine.hostId === value) && <option value={value}>{machines ? "Removed machine" : value}</option>}
+    </select>
+  </label>;
+}
+
+function AgentSelection({ label, agent, machines, disabled, note, onCustomize, onChange }: {
+  label: string; agent: AgentExecution | null; machines: Machines; disabled: boolean; note?: string;
   onCustomize(): void; onChange(update: AgentUpdate): void;
 }) {
+  // The pickers list the providers, models, and permission limit of the chosen machine.
+  const routing = agent?.hostId ? { kind: "host" as const, hostId: agent.hostId } : undefined;
   return <div className="space-y-2">
     <p className="text-sm font-medium">Agent</p>
     <div role="group" aria-label={label} className="flex flex-wrap gap-2">
@@ -22,11 +44,17 @@ function AgentSelection({ label, agent, disabled, note, onCustomize, onChange }:
       <Button variant="outline" size="sm" className="aria-pressed:border-foreground aria-pressed:bg-state-active" aria-pressed={!!agent} onClick={() => { if (!agent) onCustomize(); }}>Custom</Button>
     </div>
     {agent ? <div className="flex flex-wrap items-center gap-2">
-      <ProviderModelPicker disabled={disabled}
+      <MachineSelect hostId={agent.hostId} machines={machines} disabled={disabled} onChange={(hostId) => onChange((current) => {
+        if (!current) return current;
+        const { hostId: _previous, ...selection } = current;
+        return hostId ? { hostId, ...selection } : selection;
+      })} />
+      <ProviderModelPicker disabled={disabled} routing={routing}
         value={{ providerId: agent.providerId, model: agent.model, reasoningLevel: agent.reasoningLevel, ...(agent.serviceTier ? { serviceTier: agent.serviceTier } : {}) }}
-        onChange={(next) => onChange((current) => current && { providerId: next.providerId, model: next.model, reasoningLevel: next.reasoningLevel, permissionMode: current.permissionMode, ...(next.serviceTier ? { serviceTier: next.serviceTier } : {}) })} />
-      <PermissionModePicker disabled={disabled} providerId={agent.providerId} value={agent.permissionMode} onChange={(permissionMode) => onChange((current) => current && { ...current, permissionMode })} />
-    </div> : <p className="text-xs text-muted-foreground">Uses the agent, model, effort, and permissions bb remembers for the project the review runs in.</p>}
+        onChange={(next) => onChange((current) => current && { ...(current.hostId ? { hostId: current.hostId } : {}), providerId: next.providerId, model: next.model, reasoningLevel: next.reasoningLevel, permissionMode: current.permissionMode, ...(next.serviceTier ? { serviceTier: next.serviceTier } : {}) })} />
+      <PermissionModePicker disabled={disabled} routing={routing} providerId={agent.providerId} value={agent.permissionMode} onChange={(permissionMode) => onChange((current) => current && { ...current, permissionMode })} />
+    </div> : <p className="text-xs text-muted-foreground">Runs on the bb server with the agent, model, effort, and permissions bb remembers for the project the review runs in.</p>}
+    {agent && machines === null && <p className="text-xs text-muted-foreground">Couldn’t load your machines. Reload this page to choose another machine.</p>}
     {note && <p className="text-xs text-muted-foreground">{note}</p>}
   </div>;
 }
@@ -41,6 +69,10 @@ export function ReviewSettings({ onBack }: { onBack?: () => void }) {
   const [busy, setBusy] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [machines, setMachines] = useState<Machines>(undefined);
+  useEffect(() => {
+    rpc.call("listMachines", null).then((result) => setMachines(result.machines), () => setMachines(null));
+  }, [rpc]);
   const load = useCallback(async () => {
     setError("");
     try { const result = await rpc.call("getPreferences", null); setRecord(result); setBaseline(JSON.stringify(result.preferences)); }
@@ -93,7 +125,7 @@ export function ReviewSettings({ onBack }: { onBack?: () => void }) {
         <fieldset disabled={busy || updating} className="space-y-6">
           <section className="space-y-4 border-t border-border pt-5">
             <div><h2 className="text-sm font-semibold">Guide generation</h2><p className="mt-1 text-sm text-muted-foreground">Used when starting a guide or running Re-review. Existing guides stay as written.</p></div>
-            <AgentSelection label="Guide writer agent" agent={record.preferences.guideAgent} disabled={busy || updating} onCustomize={() => void customize("guideAgent")} onChange={(update) => setAgent("guideAgent", update)} />
+            <AgentSelection label="Guide writer agent" agent={record.preferences.guideAgent} machines={machines} disabled={busy || updating} onCustomize={() => void customize("guideAgent")} onChange={(update) => setAgent("guideAgent", update)} />
             <div className="space-y-2"><p id="guide-detail-label" className="text-sm font-medium">Detail level</p><div role="group" aria-labelledby="guide-detail-label" className="flex flex-wrap gap-2">
               {(["concise", "standard", "detailed"] as const).map((value) => <Button key={value} variant="outline" size="sm" className="aria-pressed:border-foreground aria-pressed:bg-state-active" aria-pressed={record.preferences.guideDetail === value} onClick={() => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, guideDetail: value } }); }}>{value[0].toUpperCase() + value.slice(1)}</Button>)}
             </div></div>
@@ -102,7 +134,7 @@ export function ReviewSettings({ onBack }: { onBack?: () => void }) {
           </section>
           <section className="space-y-4 border-t border-border pt-5">
             <div><h2 className="text-sm font-semibold">Review assistant</h2><p className="mt-1 text-sm text-muted-foreground">Applies to your next message, including conversations already in progress.</p></div>
-            <AgentSelection label="Review assistant agent" agent={record.preferences.assistantAgent} disabled={busy || updating} note="Used to start new conversations. In a conversation, change the model and effort per message." onCustomize={() => void customize("assistantAgent")} onChange={(update) => setAgent("assistantAgent", update)} />
+            <AgentSelection label="Review assistant agent" agent={record.preferences.assistantAgent} machines={machines} disabled={busy || updating} note="Used to start new conversations, which stay on the machine they started on. In a conversation, change the model and effort per message." onCustomize={() => void customize("assistantAgent")} onChange={(update) => setAgent("assistantAgent", update)} />
             <label className="block space-y-2"><span className="text-sm font-medium">Assistant instructions</span><Textarea aria-label="Assistant instructions" maxLength={12000} rows={5} value={record.preferences.assistantInstructions} onChange={(event) => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, assistantInstructions: event.target.value } }); }} placeholder="Prioritize correctness and security. Show a concrete failure case for suspected bugs. Keep suggestions actionable." /></label>
           </section>
           <section className="space-y-3 border-t border-border pt-5">

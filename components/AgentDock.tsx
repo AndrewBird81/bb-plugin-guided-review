@@ -26,7 +26,11 @@ export interface AgentDockProps {
   onCollapse?: () => void;
 }
 interface Persisted { mode: "panel" | "widget"; rect: Rect; }
-interface Conversation { threadId: string | null; legacy: AgentMessage[]; defaults: AgentChoice | null; }
+interface Conversation {
+  threadId: string | null; legacy: AgentMessage[]; defaults: AgentChoice | null;
+  /** The machine chosen in Review settings, when it isn't the bb server. */
+  machine?: { name: string; connected: boolean } | null;
+}
 // bb's picker resolves the first provider's default model from an empty seed.
 const UNSET_AGENT: AgentChoice = { providerId: "", model: "", reasoningLevel: "medium" };
 function bounds() { return { width: window.innerWidth, height: window.innerHeight }; }
@@ -61,6 +65,7 @@ export const AgentDock = memo(function AgentDock({ targetKey, patch, injection, 
   const handledInjection = useRef(injection?.nonce ?? null);
   const visible = active || mode === "widget";
   const threadId = conversation?.threadId ?? null;
+  const hostId = conversation?.defaults?.hostId;
 
   useEffect(() => {
     mounted.current = true;
@@ -162,7 +167,8 @@ export const AgentDock = memo(function AgentDock({ targetKey, patch, injection, 
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void start(); }
       }} placeholder="Ask the agent…" className="max-h-32 min-h-20 resize-none text-sm" />
       <div className="flex min-w-0 items-center gap-2">
-        <ProviderModelPicker value={agent} onChange={setAgent} disabled={busy} className="min-w-0" />
+        <ProviderModelPicker value={agent} onChange={(next) => setAgent({ ...(hostId ? { hostId } : {}), ...next })} routing={hostId ? { kind: "host", hostId } : undefined} disabled={busy} className="min-w-0" />
+        {conversation?.machine && <span className="min-w-0 truncate text-xs text-muted-foreground">{conversation.machine.connected ? `on ${conversation.machine.name}` : `${conversation.machine.name} is offline`}</span>}
         <Button size="sm" className="ml-auto" disabled={busy || !input.trim() || !agent.providerId || !agent.model} onClick={() => void start()} aria-label="Send"><Icon name="ArrowUp" className="size-4" aria-hidden /></Button>
       </div>
     </div>

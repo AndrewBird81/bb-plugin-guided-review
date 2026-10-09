@@ -4,6 +4,7 @@ import type { AgentExecution, ReviewPreferences } from "../lib/review-preference
 export { defaultPreferences, type AgentExecution, type ReviewPreferences } from "../lib/review-preferences";
 
 export const agentExecutionSchema = z.object({
+  hostId: z.string().min(1).max(200).optional(),
   providerId: z.string().min(1).max(200),
   model: z.string().min(1).max(200),
   reasoningLevel: z.enum(["none", "low", "medium", "high", "xhigh", "ultracode", "max", "ultra"]),

@@ -3,6 +3,7 @@ import type { Store, AgentMessage } from "./store";
 import type { Guide } from "./guide";
 import { isMissingThread } from "./thread-errors";
 import { assistantPreferencesPrompt, spawnExecution, type AgentExecution, type ReviewPreferences } from "./preferences";
+import { agentPlacement, machineStatus, machineUnavailable } from "./machines";
 
 // bb truncates configure instructions at 4,096 characters.
 const INSTRUCTIONS_LIMIT = 4000;
@@ -33,32 +34,34 @@ export function assistantInstructions(targetKey: string, guide: Guide | null, pr
 
 /**
  * The review's assistant thread, if it can still take messages. Without one,
- * the reviewer starts a conversation from `defaults`. `legacy` is a transcript
- * kept by plugin versions before conversations moved into bb threads.
+ * the reviewer starts a conversation from `defaults`, on `machine` when one is
+ * chosen. `legacy` is a transcript kept by plugin versions before conversations
+ * moved into bb threads.
  */
 export async function getConversation(bb: BbPluginApi, store: Store, targetKey: string): Promise<{
   threadId: string | null; legacy: AgentMessage[]; defaults: AgentChoice | null;
+  machine: { name: string; connected: boolean } | null;
 }> {
   const legacy = store.listAgentMessages(targetKey);
   const threadId = store.getAssistantThread(targetKey);
   if (threadId) {
     try {
       const thread = await bb.sdk.threads.get({ threadId });
-      if (thread.archivedAt == null && thread.deletedAt == null) return { threadId, legacy, defaults: null };
+      if (thread.archivedAt == null && thread.deletedAt == null) return { threadId, legacy, defaults: null, machine: null };
     } catch (error) {
       if (!isMissingThread(error)) throw error;
     }
     store.clearAssistantThread(targetKey);
   }
   const custom = store.getPreferences().preferences.assistantAgent;
-  if (custom) return { threadId: null, legacy, defaults: choice(custom) };
+  if (custom) return { threadId: null, legacy, defaults: choice(custom), machine: await machineStatus(bb, custom.hostId) };
   const projectId = store.getReview(targetKey)?.projectId;
   const project = projectId ? await bb.sdk.projects.defaultExecutionOptions({ projectId }).catch(() => null) : null;
-  return { threadId: null, legacy, defaults: project && choice(project) };
+  return { threadId: null, legacy, defaults: project && choice(project), machine: null };
 }
 
 function choice(agent: AgentChoice): AgentChoice {
-  return { providerId: agent.providerId, model: agent.model, reasoningLevel: agent.reasoningLevel, ...(agent.serviceTier ? { serviceTier: agent.serviceTier } : {}) };
+  return { ...(agent.hostId ? { hostId: agent.hostId } : {}), providerId: agent.providerId, model: agent.model, reasoningLevel: agent.reasoningLevel, ...(agent.serviceTier ? { serviceTier: agent.serviceTier } : {}) };
 }
 
 /** Start the review's assistant thread with the reviewer's first message. */
@@ -66,11 +69,12 @@ export async function startConversation(bb: BbPluginApi, store: Store, args: { t
   const review = store.getReview(args.targetKey);
   if (!review?.projectId) throw new Error("This review has no associated project; re-run `bb review` inside a project.");
   if (store.getAssistantThread(args.targetKey)) throw new Error("This review already has a conversation. Reload it to continue.");
+  const unavailable = await machineUnavailable(bb, args.agent, "review assistant");
+  if (unavailable) throw new Error(unavailable);
   const { assistantAgent } = store.getPreferences().preferences;
   const legacy = store.listAgentMessages(args.targetKey).slice(-20).map((entry) => `${entry.role}: ${entry.text}`).join("\n\n").slice(-80_000);
   const worker = await bb.sdk.threads.spawn({
-    projectId: review.projectId,
-    environment: { type: "project-default" },
+    ...(await agentPlacement(bb, args.agent, review.projectId)),
     input: [
       { type: "text", text: args.text, mentions: [] },
       ...(legacy ? [{ type: "text" as const, text: `Previous review conversation:\n${legacy}`, mentions: [], visibility: "agent-only" as const }] : []),

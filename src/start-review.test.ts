@@ -33,6 +33,7 @@ vi.mock("./gh", async (orig) => {
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import { createStore } from "./store";
 import { createPrReview } from "./start-review";
+import { defaultPreferences } from "./preferences";
 import * as gh from "./gh";
 import { targetKey } from "./targets";
 const key = targetKey({ kind: "pr", number: 7, repo: "acme/web" });
@@ -82,4 +83,16 @@ test("createPrReview rejects a non-PR-URL input", async () => {
 
   expect(res.ok).toBe(false);
   expect(res.targetKey).toBeUndefined();
+});
+
+test("an offline guide writer machine stops the review before the PR is fetched", async () => {
+  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { hosts: { get: async () => ({ id: "host_flomac", name: "FloMac", status: "disconnected", lifecycle: { phase: "active" } }) } } });
+  const store = createStore(bb);
+  store.savePreferences({ ...defaultPreferences, guideAgent: { hostId: "host_flomac", providerId: "codex", model: "gpt-6", reasoningLevel: "low", permissionMode: "auto" } }, 0);
+  vi.mocked(gh.runGh).mockClear();
+  expect(await createPrReview({ bb, store, gh }, { input: "https://github.com/acme/web/pull/7", projectId: "p1" }))
+    .toEqual({ ok: false, error: "FloMac is offline. Wake it, or choose another machine for the guide writer in Review settings." });
+  expect(gh.runGh).not.toHaveBeenCalled();
+  expect(store.getReview(key)).toBeNull();
+  expect(harness.inspection.sdk.callsTo("threads.spawn")).toEqual([]);
 });
