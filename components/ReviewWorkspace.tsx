@@ -518,7 +518,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
           </div>
         </main>
       </div>
-        <DraftTray reviewRevision={revision} account={repoAccess?.account ?? undefined} agent={{ currentFile, currentChapterId: activeId, injection, container: rootEl }} review={review} onSubmitted={() => { void load(); }} onSelectFile={(file) => { const chapter = guide.sections.find((section: any) => section.diffs.some((diff: any) => diff.file === file)); if (chapter) { setView("diff"); onSelectFile(chapter.id, file); } }} isLocal={review?.kind === "ref"} targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} prefill={draftPrefill} />
+        <DraftTray reviewRevision={revision} account={repoAccess?.account ?? undefined} agent={{ patch, injection, container: rootEl }} review={review} onSubmitted={() => { void load(); }} onSelectFile={(file) => { const chapter = guide.sections.find((section: any) => section.diffs.some((diff: any) => diff.file === file)); if (chapter) { setView("diff"); onSelectFile(chapter.id, file); } }} isLocal={review?.kind === "ref"} targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} prefill={draftPrefill} />
       </div>
 
       {/* Line-selection action bar — GitHub-style: pick lines, then act. */}

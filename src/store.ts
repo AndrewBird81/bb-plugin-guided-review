@@ -87,17 +87,17 @@ export interface Store {
   getFileViews(targetKey: string): FileView[];
   setFileViewed(targetKey: string, file: string, hash: string): void;
   unsetFileViewed(targetKey: string, file: string): void;
-  // Persistent review-agent thread + in-panel chat log (Feature 3).
+  // Legacy review-agent worker and plugin-stored chat log, read-only since
+  // conversations moved into bb threads.
   getAgentThread(targetKey: string): string | null;
-  setAgentThread(targetKey: string, threadId: string): void;
   clearAgentThread(targetKey: string): void;
   listAgentMessages(targetKey: string): AgentMessage[];
-  appendAgentMessage(
-    targetKey: string,
-    role: AgentMessage["role"],
-    text: string,
-    context?: AgentMessageContext,
-  ): AgentMessage;
+  clearAgentMessages(targetKey: string): void;
+  // The hidden bb thread behind a review's assistant chat.
+  getAssistantThread(targetKey: string): string | null;
+  setAssistantThread(targetKey: string, threadId: string): void;
+  clearAssistantThread(targetKey: string): void;
+  listAssistantThreads(): Array<{ targetKey: string; threadId: string }>;
 }
 
 export function createStore(bb: BbPluginApi): Store {
@@ -129,6 +129,7 @@ export function createStore(bb: BbPluginApi): Store {
     `CREATE TABLE IF NOT EXISTS review_lifecycle (target_key TEXT PRIMARY KEY, state TEXT NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS review_preferences (id INTEGER PRIMARY KEY CHECK (id=1), value TEXT NOT NULL, revision INTEGER NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS reviewer_notes (target_key TEXT PRIMARY KEY, body TEXT NOT NULL, revision INTEGER NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS assistant_threads (target_key TEXT PRIMARY KEY, thread_id TEXT NOT NULL, created_at INTEGER NOT NULL)`,
   ]);
 
   const rowToMeta = (r: any): ReviewMeta => ({
@@ -305,12 +306,6 @@ export function createStore(bb: BbPluginApi): Store {
       const row: any = db.prepare(`SELECT thread_id FROM agent_threads WHERE target_key=?`).get(k);
       return row?.thread_id ?? null;
     },
-    setAgentThread(k, threadId) {
-      db.prepare(
-        `INSERT INTO agent_threads (target_key,thread_id,created_at) VALUES (?,?,?)
-         ON CONFLICT(target_key) DO UPDATE SET thread_id=excluded.thread_id`,
-      ).run(k, threadId, Date.now());
-    },
     clearAgentThread(k) {
       db.prepare(`DELETE FROM agent_threads WHERE target_key=?`).run(k);
     },
@@ -326,13 +321,25 @@ export function createStore(bb: BbPluginApi): Store {
           createdAt: r.created_at,
         }));
     },
-    appendAgentMessage(k, role, text, context) {
-      const createdAt = Date.now();
-      const ctx = context ? JSON.stringify(context) : null;
-      const info = db
-        .prepare(`INSERT INTO agent_messages (target_key,role,text,context,created_at) VALUES (?,?,?,?,?)`)
-        .run(k, role, text, ctx, createdAt);
-      return { id: Number(info.lastInsertRowid), role, text, context: context ?? null, createdAt };
+    clearAgentMessages(k) {
+      db.prepare(`DELETE FROM agent_messages WHERE target_key=?`).run(k);
+    },
+    getAssistantThread(k) {
+      const row: any = db.prepare(`SELECT thread_id FROM assistant_threads WHERE target_key=?`).get(k);
+      return row?.thread_id ?? null;
+    },
+    setAssistantThread(k, threadId) {
+      db.prepare(
+        `INSERT INTO assistant_threads (target_key,thread_id,created_at) VALUES (?,?,?)
+         ON CONFLICT(target_key) DO UPDATE SET thread_id=excluded.thread_id, created_at=excluded.created_at`,
+      ).run(k, threadId, Date.now());
+    },
+    clearAssistantThread(k) {
+      db.prepare(`DELETE FROM assistant_threads WHERE target_key=?`).run(k);
+    },
+    listAssistantThreads() {
+      return db.prepare(`SELECT target_key, thread_id FROM assistant_threads`).all()
+        .map((r: any) => ({ targetKey: r.target_key, threadId: r.thread_id }));
     },
   };
 }
@@ -340,7 +347,7 @@ export function createStore(bb: BbPluginApi): Store {
 // Every table keyed by target_key. A new per-review table belongs here too.
 const REVIEW_TABLES = [
   "reviews", "patches", "guides", "drafts", "file_views", "agent_threads", "agent_messages",
-  "generations", "draft_comment_revisions", "review_lifecycle", "reviewer_notes",
+  "generations", "draft_comment_revisions", "review_lifecycle", "reviewer_notes", "assistant_threads",
 ] as const;
 
 function patchHash(patch: string) { return createHash("sha256").update(patch).digest("hex"); }

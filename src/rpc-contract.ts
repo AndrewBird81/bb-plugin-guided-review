@@ -1,23 +1,12 @@
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { releaseRpc } from "./plugin-updates";
-import { preferencesSchema } from "./preferences";
+import { agentChoiceSchema, agentExecutionSchema, preferencesSchema } from "./preferences";
 
 // The RPC data plane between the panel (app.tsx) and the backend (server.ts).
 // Extended task-by-task (reads, draft/submit, viewed-state, agent). app.tsx imports the TYPE
 // of this contract only; the backend module never enters the frontend bundle.
 const targetKey = z.object({ targetKey: z.string() }).strict();
-
-const agentContext = z
-  .object({
-    file: z.string().optional(),
-    startLine: z.number().int().optional(),
-    endLine: z.number().int().optional(),
-    side: z.enum(["additions", "deletions"]).optional(),
-    code: z.string().optional(),
-    chapterId: z.string().optional(),
-  })
-  .strict();
 
 const commentShape = z
   .object({
@@ -38,6 +27,8 @@ export const rpcContract = defineRpcContract({
     input: z.object({ preferences: preferencesSchema, revision: z.number().int().min(0) }).strict(),
     output: z.object({ preferences: preferencesSchema, revision: z.number().int() }),
   },
+  // Seeds a custom agent selection with the panel project's remembered defaults.
+  getAgentDefaults: { input: z.null(), output: z.object({ defaults: agentExecutionSchema.nullable() }) },
   getReviewerNotes: { input: targetKey, output: z.object({ body: z.string(), revision: z.number().int() }) },
   saveReviewerNotes: {
     input: z.object({ targetKey: z.string(), body: z.string().max(100000), revision: z.number().int().min(0) }).strict(),
@@ -126,18 +117,16 @@ export const rpcContract = defineRpcContract({
     output: z.object({ ok: z.boolean() }),
   },
 
-  // Feature 3: floating review agent (persistent thread + in-panel chat log)
-  getAgentMessages: { input: targetKey, output: z.object({ messages: z.array(z.any()) }) },
-  askAgent: {
-    input: z
-      .object({
-        targetKey: z.string(),
-        message: z.string().min(1),
-        context: agentContext.optional(),
-      })
-      .strict(),
-    output: z.object({ answer: z.string() }),
+  // Review assistant: one hidden bb thread per review, shown with ThreadChat
+  getConversation: {
+    input: targetKey,
+    output: z.object({ threadId: z.string().nullable(), legacy: z.array(z.any()), defaults: agentChoiceSchema.nullable() }),
   },
+  startConversation: {
+    input: z.object({ targetKey: z.string(), text: z.string().min(1), agent: agentChoiceSchema }).strict(),
+    output: z.object({ threadId: z.string() }),
+  },
+  newConversation: { input: targetKey, output: z.object({ ok: z.boolean() }) },
 
   // GitHub account indicator + switcher
   getGhAccounts: {

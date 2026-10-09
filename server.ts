@@ -7,12 +7,11 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { rpcContract } from "./src/rpc-contract";
 import { createStore } from "./src/store";
-import { changedFiles } from "./src/patch";
+import { changedFiles, splitPatchByFile } from "./src/patch";
 import { validateGuide, checkCoverage } from "./src/guide";
 import { runReviewCommand } from "./src/review-command";
 import { createPrReview } from "./src/start-review";
-import { runAgentTurn, stopReviewAgents, hasReviewAgents } from "./src/agent";
-import { isReviewAgentTurnActive } from "./src/agent-coordination";
+import { assistantInstructions, getConversation, isAssistantAnswering, newConversation, refreshAssistants, startConversation } from "./src/agent";
 import { isMissingThread } from "./src/thread-errors";
 import { computeFileViewState, hashForFile } from "./src/file-views";
 import {
@@ -48,7 +47,7 @@ export default async function plugin(bb: BbPluginApi) {
   const submitReview = createReviewSubmitter(store, runGh);
   const sync = createReviewSync(bb, store, runGh);
   const notifications = completionNotifications(bb, store);
-  const updates = createPluginUpdates(bb, () => hasGuideGenerations(bb) || hasReviewAgents(bb));
+  const updates = createPluginUpdates(bb, () => hasGuideGenerations(bb));
   bb.background.service("plugin-updates", {
     async start(signal) {
       while (!signal.aborted) {
@@ -66,7 +65,7 @@ export default async function plugin(bb: BbPluginApi) {
       }
     },
   });
-  bb.onDispose(() => { stopGuideGenerations(bb); stopReviewAgents(bb); });
+  bb.onDispose(() => { stopGuideGenerations(bb); });
 
   bb.log.info("guided-review loaded");
 
@@ -84,9 +83,22 @@ export default async function plugin(bb: BbPluginApi) {
     },
     getPreferences() { return store.getPreferences(); },
     savePreferences({ preferences, revision }) {
+      const before = store.getPreferences().preferences.assistantInstructions;
       const result = store.savePreferences(preferences, revision);
       bb.realtime.publish("preferences", {});
+      if (result.preferences.assistantInstructions !== before) void refreshAssistants(bb, store);
       return result;
+    },
+    async getAgentDefaults() {
+      // Panel-started reviews run in the personal project (see startReview).
+      try {
+        const projects = await bb.sdk.projects.list({ includePersonal: true });
+        const project = projects.find((p) => p.kind === "personal") ?? projects[0];
+        const d = project ? await bb.sdk.projects.defaultExecutionOptions({ projectId: project.id }) : null;
+        return { defaults: d && { providerId: d.providerId, model: d.model, reasoningLevel: d.reasoningLevel, permissionMode: d.permissionMode, serviceTier: d.serviceTier } };
+      } catch {
+        return { defaults: null };
+      }
     },
     getReviewerNotes({ targetKey }) { return store.getReviewerNotes(targetKey); },
     saveReviewerNotes({ targetKey, body, revision }) { return store.saveReviewerNotes(targetKey, body, revision); },
@@ -203,15 +215,16 @@ export default async function plugin(bb: BbPluginApi) {
     async deleteReview({ targetKey }) {
       const review = store.getReview(targetKey);
       if (!review) return { ok: true };
-      // A guide worker can't be cancelled per review, and an answer in progress could re-attach its worker.
+      // A guide worker can't be cancelled per review, and an answer in progress is the reviewer's to finish.
       if (review.status === "generating") return { ok: false, error: "Wait for the guide to finish generating, then delete the review." };
-      if (isReviewAgentTurnActive(bb, targetKey)) return { ok: false, error: "Wait for the assistant to finish answering, then delete the review." };
-      const threadId = store.getAgentThread(targetKey);
+      if (await isAssistantAnswering(bb, store, targetKey)) return { ok: false, error: "Wait for the assistant to finish answering, then delete the review." };
+      const threadIds = [store.getAssistantThread(targetKey), store.getAgentThread(targetKey)];
       store.deleteReview(targetKey);
       bb.realtime.publish(`review:${targetKey}`, { ts: Date.now() });
       bb.realtime.publish("reviews", { ts: Date.now() });
       await notifications.forget(targetKey).catch(() => {});
-      if (threadId) {
+      for (const threadId of threadIds) {
+        if (!threadId) continue;
         await bb.sdk.threads.stop({ threadId }).catch(() => {});
         await bb.sdk.threads.delete({ threadId, childThreadsConfirmed: false }).catch((error) => {
           if (!isMissingThread(error)) bb.log.warn(`Could not delete review thread ${threadId}: ${String(error)}`);
@@ -262,18 +275,16 @@ export default async function plugin(bb: BbPluginApi) {
       return { ok: true };
     },
 
-    // Feature 3: floating review agent
-    getAgentMessages({ targetKey }) {
-      return { messages: store.listAgentMessages(targetKey) };
+    // Review assistant: a hidden bb thread per review, shown with ThreadChat
+    getConversation({ targetKey }) {
+      return getConversation(bb, store, targetKey);
     },
-    async askAgent({ targetKey, message, context }) {
-      const m = store.getReview(targetKey);
-      if (!m?.projectId) {
-        return { answer: "This review has no associated project; re-run `bb review` inside a project." };
-      }
-      const res = await runAgentTurn(bb, store, { targetKey, message, context, projectId: m.projectId });
-      bb.realtime.publish(`agent:${targetKey}`, { ts: Date.now() });
-      return res;
+    startConversation({ targetKey, text, agent }) {
+      return startConversation(bb, store, { targetKey, text, agent });
+    },
+    async newConversation({ targetKey }) {
+      await newConversation(bb, store, targetKey);
+      return { ok: true };
     },
     // GitHub account indicator + switcher
     async getGhAccounts() {
@@ -302,13 +313,21 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.agents.registerTool({
     name: "read_review_patch",
-    description: "Return the diff text for a Guided Review target (paginated).",
+    description: "Return the diff text for a Guided Review target (paginated). Pass file to read one file's diff.",
     parameters: z.object({
       targetKey: z.string(),
+      file: z.string().optional(),
       offset: z.number().int().min(0).optional(),
       limit: z.number().int().min(1).max(200_000).optional(),
     }),
-    async execute({ targetKey, offset, limit }) {
+    async execute({ targetKey, file, offset, limit }) {
+      if (file !== undefined) {
+        const diff = splitPatchByFile(store.readPatch(targetKey, 0, store.readPatch(targetKey, 0, 0).total).text).find((f) => f.path === file);
+        if (!diff) return { content: [{ type: "text", text: `This review has no diff for ${file}.` }], isError: true };
+        const text = diff.text.slice(offset ?? 0, (offset ?? 0) + (limit ?? 200_000));
+        const end = (offset ?? 0) + text.length;
+        return text + (end < diff.text.length ? `\n\n[${end}/${diff.text.length} bytes — call again with offset=${end}]` : "");
+      }
       const { text, total } = store.readPatch(targetKey, offset, limit);
       const end = (offset ?? 0) + text.length;
       const more = end < total ? `\n\n[${end}/${total} bytes — call again with offset=${end}]` : "";
@@ -342,20 +361,23 @@ export default async function plugin(bb: BbPluginApi) {
   // Only expose these tools to THIS plugin's own spawned generation thread.
   // Both the generation thread and the review-agent thread are spawned by this
   // plugin (origin.pluginId matches for both), so the origin check alone is
-  // not enough — gate on the generation thread's distinctive title too. The
-  // review-agent thread ("Review agent: …") answers from inlined context and
-  // intentionally gets no tools.
+  // not enough — gate on the generation thread's distinctive title too.
   bb.agents.configure((context) => {
     if (context.origin?.pluginId !== bb.pluginId) return { tools: [], skills: [] };
     const title = context.thread?.title ?? "";
     if (title.startsWith("Generate guide:")) {
       return { tools: ["read_review_patch", "generate_review_guide"], skills: ["guided-review-generate"] };
     }
-    // The floating review-agent thread can read any file's diff on demand, so
-    // the chat works across the whole review — but it never gets the
-    // guide-writing tool or the generation skill.
+    // The review assistant can read any file's diff on demand, so the chat
+    // works across the whole review — but it never gets the guide-writing tool
+    // or the generation skill. Its review context arrives as instructions.
     if (title.startsWith("Review agent:")) {
-      return { tools: ["read_review_patch"], skills: [] };
+      const { targetKey } = context.pluginMetadata;
+      const review = typeof targetKey === "string" ? store.getReview(targetKey) : null;
+      return {
+        tools: ["read_review_patch"], skills: [],
+        ...(review ? { instructions: assistantInstructions(review.targetKey, store.getGuide(review.targetKey), store.getPreferences().preferences) } : {}),
+      };
     }
     return { tools: [], skills: [] };
   });

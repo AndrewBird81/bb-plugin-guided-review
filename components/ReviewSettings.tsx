@@ -1,13 +1,35 @@
 import { useCallback, useEffect, useState } from "react";
-import { useRpc, useBbNavigate } from "@get-bb/plugin-sdk/app";
+import { useRpc, useBbNavigate, experimental_PermissionModePicker as PermissionModePicker, experimental_ProviderModelPicker as ProviderModelPicker } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../src/rpc-contract";
 import type { PreferencesRecord } from "../src/preferences";
-import { defaultPreferences } from "../lib/review-preferences";
+import { defaultPreferences, type AgentExecution } from "../lib/review-preferences";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { useReviewSession } from "../lib/review-session";
 import { ReleaseSettings, SetupReadiness } from "./ReleaseSettings";
 import { Icon } from "./ui/icon";
+
+type AgentUpdate = (agent: AgentExecution | null) => AgentExecution | null;
+
+function AgentSelection({ label, agent, disabled, note, onCustomize, onChange }: {
+  label: string; agent: AgentExecution | null; disabled: boolean; note?: string;
+  onCustomize(): void; onChange(update: AgentUpdate): void;
+}) {
+  return <div className="space-y-2">
+    <p className="text-sm font-medium">Agent</p>
+    <div role="group" aria-label={label} className="flex flex-wrap gap-2">
+      <Button variant="outline" size="sm" className="aria-pressed:border-foreground aria-pressed:bg-state-active" aria-pressed={!agent} onClick={() => onChange(() => null)}>Project defaults</Button>
+      <Button variant="outline" size="sm" className="aria-pressed:border-foreground aria-pressed:bg-state-active" aria-pressed={!!agent} onClick={() => { if (!agent) onCustomize(); }}>Custom</Button>
+    </div>
+    {agent ? <div className="flex flex-wrap items-center gap-2">
+      <ProviderModelPicker disabled={disabled}
+        value={{ providerId: agent.providerId, model: agent.model, reasoningLevel: agent.reasoningLevel, ...(agent.serviceTier ? { serviceTier: agent.serviceTier } : {}) }}
+        onChange={(next) => onChange((current) => current && { providerId: next.providerId, model: next.model, reasoningLevel: next.reasoningLevel, permissionMode: current.permissionMode, ...(next.serviceTier ? { serviceTier: next.serviceTier } : {}) })} />
+      <PermissionModePicker disabled={disabled} providerId={agent.providerId} value={agent.permissionMode} onChange={(permissionMode) => onChange((current) => current && { ...current, permissionMode })} />
+    </div> : <p className="text-xs text-muted-foreground">Uses the agent, model, effort, and permissions bb remembers for the project the review runs in.</p>}
+    {note && <p className="text-xs text-muted-foreground">{note}</p>}
+  </div>;
+}
 
 // Plain function: the host slot collector requires a component function.
 export function ReviewSettings({ onBack }: { onBack?: () => void }) {
@@ -26,6 +48,19 @@ export function ReviewSettings({ onBack }: { onBack?: () => void }) {
   }, [rpc]);
   useEffect(() => { void load(); }, [load]);
   const dirty = record !== null && baseline !== JSON.stringify(record.preferences);
+  // A custom selection is complete once the host pickers resolve a provider and model.
+  const incomplete = [record?.preferences.guideAgent, record?.preferences.assistantAgent].some((agent) => agent && (!agent.providerId || !agent.model));
+  function setAgent(key: "guideAgent" | "assistantAgent", update: AgentUpdate) {
+    setSaved(false);
+    // Functional: both pickers can report reconciled values in the same render.
+    setRecord((current) => current && { ...current, preferences: { ...current.preferences, [key]: update(current.preferences[key]) } });
+  }
+  async function customize(key: "guideAgent" | "assistantAgent") {
+    let seed: AgentExecution = { providerId: "", model: "", reasoningLevel: "medium", permissionMode: "auto" };
+    try { seed = (await rpc.call("getAgentDefaults", null)).defaults ?? seed; }
+    catch { /* The pickers resolve bb's own defaults from the empty seed. */ }
+    setAgent(key, (agent) => agent ?? seed);
+  }
   useEffect(() => {
     if (!dirty) return;
     const protect = (event: BeforeUnloadEvent) => { event.preventDefault(); };
@@ -58,14 +93,16 @@ export function ReviewSettings({ onBack }: { onBack?: () => void }) {
         <fieldset disabled={busy || updating} className="space-y-6">
           <section className="space-y-4 border-t border-border pt-5">
             <div><h2 className="text-sm font-semibold">Guide generation</h2><p className="mt-1 text-sm text-muted-foreground">Used when starting a guide or running Re-review. Existing guides stay as written.</p></div>
+            <AgentSelection label="Guide writer agent" agent={record.preferences.guideAgent} disabled={busy || updating} onCustomize={() => void customize("guideAgent")} onChange={(update) => setAgent("guideAgent", update)} />
             <div className="space-y-2"><p id="guide-detail-label" className="text-sm font-medium">Detail level</p><div role="group" aria-labelledby="guide-detail-label" className="flex flex-wrap gap-2">
               {(["concise", "standard", "detailed"] as const).map((value) => <Button key={value} variant="outline" size="sm" className="aria-pressed:border-foreground aria-pressed:bg-state-active" aria-pressed={record.preferences.guideDetail === value} onClick={() => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, guideDetail: value } }); }}>{value[0].toUpperCase() + value.slice(1)}</Button>)}
             </div></div>
             <label className="block space-y-2"><span className="text-sm font-medium">Guide instructions</span><Textarea aria-label="Guide instructions" maxLength={12000} rows={6} value={record.preferences.guideInstructions} onChange={(event) => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, guideInstructions: event.target.value } }); }} placeholder="Explain data migrations and compatibility. Keep tests with the behavior they cover. Write for engineers new to this repository." /><span className="block text-xs text-muted-foreground">Add review priorities, language, and team conventions. These extend the built-in guide skill.</span></label>
-            <details className="text-sm"><summary className="cursor-pointer text-muted-foreground">About the guide skill</summary><div className="mt-3 space-y-2 text-muted-foreground"><p>The bundled skill reads the complete diff, organizes chapters by meaning, and covers every changed file exactly once. Custom instructions shape its explanations while the required output format stays validated.</p><p>Based on the chaptered walkthrough approach from <a className="underline underline-offset-4" href="https://github.com/plannotator/guides/blob/main/skills/plannotator-guide/SKILL.md" target="_blank" rel="noreferrer">Plannotator’s guide skill</a>, adapted for BB. Guides run through your BB project’s agent.</p></div></details>
+            <details className="text-sm"><summary className="cursor-pointer text-muted-foreground">About the guide skill</summary><div className="mt-3 space-y-2 text-muted-foreground"><p>The bundled skill reads the complete diff, organizes chapters by meaning, and covers every changed file exactly once. Custom instructions shape its explanations while the required output format stays validated.</p><p>Based on the chaptered walkthrough approach from <a className="underline underline-offset-4" href="https://github.com/plannotator/guides/blob/main/skills/plannotator-guide/SKILL.md" target="_blank" rel="noreferrer">Plannotator’s guide skill</a>, adapted for BB. Guides run through the agent selected above.</p></div></details>
           </section>
           <section className="space-y-4 border-t border-border pt-5">
             <div><h2 className="text-sm font-semibold">Review assistant</h2><p className="mt-1 text-sm text-muted-foreground">Applies to your next message, including conversations already in progress.</p></div>
+            <AgentSelection label="Review assistant agent" agent={record.preferences.assistantAgent} disabled={busy || updating} note="Used to start new conversations. In a conversation, change the model and effort per message." onCustomize={() => void customize("assistantAgent")} onChange={(update) => setAgent("assistantAgent", update)} />
             <label className="block space-y-2"><span className="text-sm font-medium">Assistant instructions</span><Textarea aria-label="Assistant instructions" maxLength={12000} rows={5} value={record.preferences.assistantInstructions} onChange={(event) => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, assistantInstructions: event.target.value } }); }} placeholder="Prioritize correctness and security. Show a concrete failure case for suspected bugs. Keep suggestions actionable." /></label>
           </section>
           <section className="space-y-3 border-t border-border pt-5">
@@ -74,7 +111,7 @@ export function ReviewSettings({ onBack }: { onBack?: () => void }) {
           </section>
         </fieldset>
         <div className="sticky bottom-0 flex flex-wrap items-center gap-3 border-t border-border bg-background py-4">
-          <Button disabled={!dirty || busy || updating} onClick={() => void save()}>{busy ? "Saving…" : "Save settings"}</Button>
+          <Button disabled={!dirty || incomplete || busy || updating} onClick={() => void save()}>{busy ? "Saving…" : "Save settings"}</Button>
           {dirty && <Button variant="ghost" disabled={busy || updating} onClick={() => { setRecord({ ...record, preferences: JSON.parse(baseline) }); setError(""); }}>Discard edits</Button>}
           <span role="status" className="text-xs text-muted-foreground">{saved ? "Settings saved" : dirty ? "Unsaved changes" : ""}</span>
           <Button variant="ghost" size="sm" className="ml-auto" disabled={busy || updating} onClick={() => { setSaved(false); setRecord({ ...record, preferences: { ...defaultPreferences } }); }}>Restore defaults</Button>

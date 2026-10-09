@@ -3,7 +3,6 @@ import { z } from "zod";
 import type { Store, ReviewLifecycle } from "./store";
 import { isMissingThread } from "./thread-errors";
 import type { runGh } from "./gh";
-import { withReviewAgentMaintenance } from "./agent-coordination";
 
 const query = `query($owner:String!,$repo:String!,$number:Int!){
   viewer{login} repository(owner:$owner,name:$repo){pullRequest(number:$number){
@@ -27,28 +26,28 @@ export function createReviewSync(bb: BbPluginApi, store: Store, run: typeof runG
   let disposed = false;
   bb.onDispose(() => { disposed = true; });
 
+  // Tidies a legacy review-agent worker. Assistant threads in bb stay
+  // unarchived, because an archived thread cannot take messages.
   async function maintainThread(targetKey: string) {
-    await withReviewAgentMaintenance(bb, targetKey, async () => {
-      const threadId = store.getAgentThread(targetKey);
-      if (!threadId || disposed) return;
-      try {
-        if (!hidden.has(threadId)) {
-          await bb.sdk.threads.update({ threadId, visibility: "hidden" });
-          hidden.add(threadId);
-        }
-        if (store.getReview(targetKey)?.archivedAt && !archived.has(threadId) && !disposed) {
-          try { await bb.sdk.threads.stop({ threadId }); }
-          finally { if (!disposed) await bb.sdk.threads.archive({ threadId }); }
-          archived.add(threadId);
-        }
-      } catch (error) {
-        if (disposed) return;
-        if (isMissingThread(error)) {
-          // Retain the transcript, and never detach a different replacement worker.
-          if (store.getAgentThread(targetKey) === threadId) store.clearAgentThread(targetKey);
-        } else bb.log.warn(`Could not tidy review thread ${threadId}: ${String(error)}`);
+    const threadId = store.getAgentThread(targetKey);
+    if (!threadId || disposed) return;
+    try {
+      if (!hidden.has(threadId)) {
+        await bb.sdk.threads.update({ threadId, visibility: "hidden" });
+        hidden.add(threadId);
       }
-    });
+      if (store.getReview(targetKey)?.archivedAt && !archived.has(threadId) && !disposed) {
+        try { await bb.sdk.threads.stop({ threadId }); }
+        finally { if (!disposed) await bb.sdk.threads.archive({ threadId }); }
+        archived.add(threadId);
+      }
+    } catch (error) {
+      if (disposed) return;
+      if (isMissingThread(error)) {
+        // Retain the transcript, and never detach a different replacement worker.
+        if (store.getAgentThread(targetKey) === threadId) store.clearAgentThread(targetKey);
+      } else bb.log.warn(`Could not tidy review thread ${threadId}: ${String(error)}`);
+    }
   }
 
   function one(targetKey: string, force = false): Promise<void> {

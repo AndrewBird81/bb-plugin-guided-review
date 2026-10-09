@@ -44,21 +44,30 @@ test("file views upsert, read, and unset", () => {
   expect(s.getFileViews("pr-1").map((v) => v.file)).toEqual(["b.ts"]);
 });
 
-test("agent thread id round-trips", () => {
+test("assistant thread ids round-trip and list", () => {
   const s = store();
-  expect(s.getAgentThread("pr-1")).toBeNull();
-  s.setAgentThread("pr-1", "th_9");
-  expect(s.getAgentThread("pr-1")).toBe("th_9");
+  expect(s.getAssistantThread("pr-1")).toBeNull();
+  s.setAssistantThread("pr-1", "th_9");
+  s.setAssistantThread("pr-1", "th_10");
+  s.setAssistantThread("pr-2", "th_11");
+  expect(s.getAssistantThread("pr-1")).toBe("th_10");
+  expect(s.listAssistantThreads()).toEqual([{ targetKey: "pr-1", threadId: "th_10" }, { targetKey: "pr-2", threadId: "th_11" }]);
+  s.clearAssistantThread("pr-1");
+  expect(s.getAssistantThread("pr-1")).toBeNull();
 });
 
-test("agent messages append and list oldest-first with context", () => {
-  const s = store();
-  s.appendAgentMessage("pr-1", "user", "why flagged?", { file: "a.ts", startLine: 3, endLine: 5 });
-  s.appendAgentMessage("pr-1", "assistant", "because it's a test file");
+test("legacy agent messages list oldest-first with context, and clear", () => {
+  const { bb } = createFakePluginHost({ pluginId: "guided-review" });
+  const s = createStore(bb);
+  const insert = bb.storage.database().prepare(`INSERT INTO agent_messages (target_key,role,text,context,created_at) VALUES ('pr-1',?,?,?,1)`);
+  insert.run("user", "why flagged?", JSON.stringify({ file: "a.ts", startLine: 3, endLine: 5 }));
+  insert.run("assistant", "because it's a test file", null);
   const msgs = s.listAgentMessages("pr-1");
   expect(msgs.map((m) => m.role)).toEqual(["user", "assistant"]);
   expect(msgs[0].context).toEqual({ file: "a.ts", startLine: 3, endLine: 5 });
   expect(msgs[1].context).toBeNull();
+  s.clearAgentMessages("pr-1");
+  expect(s.listAgentMessages("pr-1")).toEqual([]);
 });
 
 test("deleteReview clears every per-review table and leaves other reviews intact", () => {
@@ -71,8 +80,10 @@ test("deleteReview clears every per-review table and leaves other reviews intact
     s.saveGuide(key, { title: "T", intent: "I", sections: [], unplacedFiles: [] });
     s.upsertDraftComment(key, { file: "a.ts", line: 1, side: "RIGHT", body: "x" });
     s.setFileViewed(key, "a.ts", "hash");
-    s.setAgentThread(key, `th-${key}`);
-    s.appendAgentMessage(key, "user", "question");
+    s.setAssistantThread(key, `th-${key}`);
+    // Legacy conversation rows, from before conversations moved into bb threads.
+    bb.storage.database().prepare(`INSERT INTO agent_threads (target_key,thread_id,created_at) VALUES (?,?,1)`).run(key, `legacy-${key}`);
+    bb.storage.database().prepare(`INSERT INTO agent_messages (target_key,role,text,context,created_at) VALUES (?,'user','question',NULL,1)`).run(key);
     s.setLifecycle(key, { userArchivedAt: 1 });
     s.saveReviewerNotes(key, "private", 0);
   }

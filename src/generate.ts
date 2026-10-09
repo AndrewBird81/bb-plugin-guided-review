@@ -1,7 +1,8 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Store } from "./store";
 import { completionNotifications } from "./completion-notifications";
-import { defaultPreferences, guidePreferencesPrompt, type ReviewPreferences } from "./preferences";
+import { defaultPreferences, guidePreferencesPrompt, spawnExecution, type ReviewPreferences } from "./preferences";
+import { refreshAssistants } from "./agent";
 
 const active = new WeakMap<BbPluginApi, Set<AbortController>>();
 export function hasGuideGenerations(bb: BbPluginApi) { return (active.get(bb)?.size ?? 0) > 0; }
@@ -36,17 +37,21 @@ export async function generateGuide(
   try {
     generationId = store.beginGeneration(targetKey);
     threads = bb.sdk.threads;
+    const preferences = store.getPreferences().preferences;
     const worker = await threads.spawn({
       projectId,
       environment: { type: "project-default" },
-      prompt: buildGenerationPrompt(targetKey, generationId, store.getPreferences().preferences),
+      prompt: buildGenerationPrompt(targetKey, generationId, preferences),
       title: `Generate guide: ${targetKey}`,
       visibility: "hidden",
+      ...spawnExecution(preferences.guideAgent),
     });
     workerId = worker.id;
     await threads.wait({ threadId: worker.id, status: "idle", timeoutMs: 600_000, signal: controller.signal });
-  } catch {
-    // spawn/wait failed — fall through and finalize as error below
+  } catch (error) {
+    // spawn/wait failed — fall through and finalize as error below. The log
+    // carries the reason, such as a custom agent bb can no longer start.
+    if (!controller.signal.aborted) bb.log.warn(`Guide generation for ${targetKey} failed: ${String(error)}`);
   } finally {
     if (workerId && threads) {
       try { await threads.archive({ threadId: workerId }); } catch { /* best effort */ }
@@ -57,6 +62,8 @@ export async function generateGuide(
     if (!generationId || !store.isCurrentGeneration(targetKey, generationId)) return;
     const ok = !controller.signal.aborted && store.getGuide(targetKey) !== null;
     store.setStatus(targetKey, ok ? "ready" : "error");
+    // The review's assistant reads the new guide when its runtime restarts.
+    if (ok) void refreshAssistants(bb, store, [targetKey]);
     bb.realtime.publish(`review:${targetKey}`, { status: ok ? "ready" : "error" });
     bb.realtime.publish("reviews", { ts: Date.now() });
     if (!controller.signal.aborted) await completionNotifications(bb, store).queue({

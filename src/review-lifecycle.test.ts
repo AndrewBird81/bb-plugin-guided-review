@@ -7,17 +7,20 @@ function setup(state = "OPEN", reviews: unknown[] = []) {
   const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: { update: async () => ({}), stop: async () => ({}), archive: async () => ({}) } } });
   const store = createStore(bb);
   store.saveReview({ targetKey: "pr-1", kind: "pr", repo: "acme/web", number: 1, headSha: "sha1", createdAt: 1, status: "ready" });
-  store.setAgentThread("pr-1", "agent-1");
+  // A legacy review-agent worker, from before conversations moved into bb threads.
+  bb.storage.database().prepare(`INSERT INTO agent_threads (target_key,thread_id,created_at) VALUES ('pr-1','agent-1',1)`).run();
+  store.setAssistantThread("pr-1", "assistant-1");
   const run = vi.fn(async () => ({ code: 0, stderr: "", stdout: JSON.stringify({ data: { viewer: { login: "me" }, repository: { pullRequest: { state, headRefOid: "sha1", reviews: { nodes: reviews } } } } }) }));
   return { bb, harness, store, run, sync: createReviewSync(bb, store, run) };
 }
 
-test("sync archives merged reviews and hides and archives their conversation", async () => {
+test("sync archives merged reviews and their legacy worker, but keeps the assistant chat writable", async () => {
   const { sync, store, harness } = setup("MERGED");
   await sync.all();
   expect(store.getReview("pr-1")).toMatchObject({ prState: "MERGED", archivedAt: expect.any(Number) });
   expect(harness.inspection.sdk.callsTo("threads.update")[0][0]).toEqual({ threadId: "agent-1", visibility: "hidden" });
-  expect(harness.inspection.sdk.callsTo("threads.archive")).toHaveLength(1);
+  expect(harness.inspection.sdk.callsTo("threads.archive")).toEqual([[{ threadId: "agent-1" }]]);
+  expect(store.getAssistantThread("pr-1")).toBe("assistant-1");
 });
 
 test("sync restores the viewer's approval, ignoring someone else's later review", async () => {
@@ -58,8 +61,8 @@ test("an in-flight poll cannot overwrite a newer local submission", async () => 
 });
 
 test("deleted workers are detached without losing the review conversation", async () => {
-  const { sync, store, harness } = setup();
-  store.appendAgentMessage("pr-1", "assistant", "Keep this answer");
+  const { bb, sync, store, harness } = setup();
+  bb.storage.database().prepare(`INSERT INTO agent_messages (target_key,role,text,context,created_at) VALUES ('pr-1','assistant','Keep this answer',NULL,1)`).run();
   harness.inspection.sdk.stub("threads.update", async () => { throw new Error("HTTP 404: Thread not found"); });
   await sync.all();
   expect(store.getAgentThread("pr-1")).toBeNull();

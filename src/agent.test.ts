@@ -1,257 +1,164 @@
-import { test, expect, vi } from "vitest";
+import { test, expect } from "vitest";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
+import type { BbPluginApi, PluginAgentConfigurationContext } from "@get-bb/plugin-sdk";
 import { createStore } from "./store";
-import { runAgentTurn, buildSeedPrompt, buildTurnText, extractSelectedLines } from "./agent";
-import { createReviewSync } from "./review-lifecycle";
+import { assistantInstructions, getConversation, newConversation, refreshAssistants, startConversation } from "./agent";
+import { defaultPreferences } from "./preferences";
+import { generateGuide } from "./generate";
+import plugin from "../server";
 
-const linePatch = [
-  "diff --git a/x.ts b/x.ts",
-  "--- a/x.ts",
-  "+++ b/x.ts",
-  "@@ -1,3 +1,4 @@",
-  " a",
-  "-b",
-  "+b2",
-  "+c",
-  " d",
-  "",
-].join("\n");
+const opus = { providerId: "claude-code", model: "opus", reasoningLevel: "high" } as const;
+const guide = (intent: string) => ({ title: "Change", intent, sections: [{ id: "s1", title: "Retry", overview: "Retries once.", diffs: [] }], unplacedFiles: [] });
 
-function host() {
-  let spawns = 0;
-  let sends = 0;
-  const { bb } = createFakePluginHost({
-    pluginId: "guided-review",
-    sdk: {
-      threads: {
-        get: async () => ({ archivedAt: null, deletedAt: null }),
-        spawn: async () => {
-          spawns++;
-          return { id: "th_agent" };
-        },
-        send: async () => {
-          sends++;
-          return { ok: true };
-        },
-        wait: async () => {},
-        output: async () => "It's a test file — safe to skim.",
-        open: async () => ({ delivered: 1 }),
-        archive: async () => {},
-        stop: async () => {},
-      },
-    },
-  });
-  return { bb, counts: () => ({ spawns, sends }) };
+function host(threads: Record<string, unknown> = {}, projects: Record<string, unknown> = {}) {
+  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: {
+    spawn: async () => ({ id: "worker" }), archive: async () => ({}), stop: async () => ({}),
+    get: async () => ({ archivedAt: null, deletedAt: null, status: "idle" }), ...threads,
+  }, projects } });
+  const store = createStore(bb);
+  store.saveReview({ targetKey: "pr-1", kind: "pr", status: "ready", createdAt: 1, projectId: "p1" });
+  return { bb, harness, store };
 }
 
-test("first turn spawns one persistent thread, logs both messages, returns answer", async () => {
-  const { bb, counts } = host();
-  const store = createStore(bb);
-  store.savePatch("pr-1", "diff --git a/a.ts b/a.ts\n+x\n");
-  const res = await runAgentTurn(bb, store, { targetKey: "pr-1", message: "why flagged?", projectId: "p1" });
-  expect(res.answer).toContain("skim");
-  expect(counts().spawns).toBe(1);
-  expect(store.getAgentThread("pr-1")).toBe("th_agent");
-  const msgs = store.listAgentMessages("pr-1");
-  expect(msgs.map((m) => m.role)).toEqual(["user", "assistant"]);
-});
+/** Conversations stored by plugin versions before the chat moved into bb threads. */
+function legacyConversation(bb: BbPluginApi, worker: string, messages: Array<[string, string]>) {
+  const db = bb.storage.database();
+  db.prepare(`INSERT INTO agent_threads (target_key,thread_id,created_at) VALUES ('pr-1',?,1)`).run(worker);
+  for (const [role, text] of messages) db.prepare(`INSERT INTO agent_messages (target_key,role,text,context,created_at) VALUES ('pr-1',?,?,NULL,1)`).run(role, text);
+}
 
-test("a later turn reuses the thread via send, does not spawn again", async () => {
-  const { bb, counts } = host();
-  const store = createStore(bb);
-  store.savePatch("pr-1", "diff --git a/a.ts b/a.ts\n+x\n");
-  await runAgentTurn(bb, store, { targetKey: "pr-1", message: "first", projectId: "p1" });
-  await runAgentTurn(bb, store, { targetKey: "pr-1", message: "second", projectId: "p1" });
-  expect(counts().spawns).toBe(1);
-  expect(counts().sends).toBe(1);
-  expect(store.listAgentMessages("pr-1")).toHaveLength(4);
-});
-
-test("seed prompt carries intent, chapter outline, and the read tool + targetKey", () => {
-  const seed = buildSeedPrompt(
-    {
-      title: "T",
-      intent: "Add token refresh",
-      sections: [{ id: "s1", title: "Auth", overview: "refresh before expiry", diffs: [] }],
-      unplacedFiles: [],
-    } as any,
-    "pr-42",
-  );
-  expect(seed).toContain("Add token refresh");
-  expect(seed).toContain("Auth");
-  expect(seed).toContain("read_review_patch");
-  expect(seed).toContain("pr-42");
-});
-
-test("review conversations stay hidden and release the runtime after each turn", async () => {
-  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: {
-    spawn: async () => ({ id: "hidden-agent" }), wait: async () => {},
-    output: async () => "Answer", stop: async () => {},
-  } } });
-  await runAgentTurn(bb, createStore(bb), { targetKey: "pr-1", message: "Explain", projectId: "p1" });
-  expect(harness.inspection.sdk.callsTo("threads.spawn")[0][0]).toMatchObject({ visibility: "hidden" });
-  expect(harness.inspection.sdk.callsTo("threads.stop")).toHaveLength(1);
-});
-
-test("turn text inlines a highlighted code selection when provided", () => {
-  const text = buildTurnText({
-    message: "is this safe?",
-    context: { file: "a.ts", startLine: 3, endLine: 4, code: "const x = 1" },
-    patch: "",
+test("the first message starts one hidden assistant thread on the chosen agent", async () => {
+  const { bb, harness, store } = host();
+  expect(await startConversation(bb, store, { targetKey: "pr-1", text: "Why retry?", agent: opus })).toEqual({ threadId: "worker" });
+  const [spawn] = harness.inspection.sdk.callsTo("threads.spawn")[0] as [any];
+  expect(spawn).toMatchObject({
+    projectId: "p1", environment: { type: "project-default" }, title: "Review agent: pr-1", visibility: "hidden",
+    pluginMetadata: { targetKey: "pr-1" }, input: [{ type: "text", text: "Why retry?", mentions: [] }],
+    ...opus, executionInputSources: { providerId: "explicit", model: "explicit", reasoningLevel: "explicit" },
   });
-  expect(text).toContain("is this safe?");
-  expect(text).toContain("a.ts");
-  expect(text).toContain("const x = 1");
-});
-
-test("extractSelectedLines pulls the exact new-side lines of a range", () => {
-  expect(extractSelectedLines(linePatch, "x.ts", 2, 3, "additions")).toBe("+b2\n+c");
-});
-
-test("extractSelectedLines pulls old-side (deletions) lines", () => {
-  expect(extractSelectedLines(linePatch, "x.ts", 2, 2, "deletions")).toBe("-b");
-});
-
-test("a line-range selection inlines exactly those lines and focuses the agent", () => {
-  const text = buildTurnText({
-    message: "why this loop?",
-    context: { file: "x.ts", startLine: 2, endLine: 3, side: "additions" },
-    patch: linePatch,
-  });
-  expect(text).toContain("x.ts lines 2-3");
-  expect(text).toContain("+b2");
-  expect(text).toContain("+c");
-  expect(text).toContain("Focus on exactly these lines");
-});
-
-test("a deleted worker is replaced with hidden compute while retaining conversation context", async () => {
-  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: {
-    get: async () => ({ archivedAt: null, deletedAt: null }),
-    send: async () => { throw new Error("HTTP 404: Thread not found"); },
-    spawn: async () => ({ id: "replacement" }), wait: async () => {}, output: async () => "Continued answer", stop: async () => {},
-  } } });
-  const store = createStore(bb);
-  store.setAgentThread("pr-1", "deleted");
-  store.appendAgentMessage("pr-1", "assistant", "Earlier explanation");
-  expect(await runAgentTurn(bb, store, { targetKey: "pr-1", message: "Go on", projectId: "p1" })).toEqual({ answer: "Continued answer" });
-  expect(store.getAgentThread("pr-1")).toBe("replacement");
-  expect(harness.inspection.sdk.callsTo("threads.spawn")[0][0]).toMatchObject({ visibility: "hidden", prompt: expect.stringContaining("Earlier explanation") });
-});
-
-test("an archived worker is replaced without reopening it, preserving the conversation", async () => {
-  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: {
-    get: async () => ({ archivedAt: 123, deletedAt: null }),
-    spawn: async () => ({ id: "fresh-hidden-worker" }), wait: async () => {}, output: async () => "New answer", stop: async () => {},
-  } } });
-  const store = createStore(bb);
-  store.setAgentThread("pr-1", "archived-worker");
-  store.appendAgentMessage("pr-1", "assistant", "Earlier explanation");
-  await runAgentTurn(bb, store, { targetKey: "pr-1", projectId: "p1", message: "Continue the review" });
-  expect(harness.inspection.sdk.callsTo("threads.send")).toHaveLength(0);
-  expect(harness.inspection.sdk.callsTo("threads.spawn")[0][0]).toMatchObject({ visibility: "hidden", prompt: expect.stringContaining("Earlier explanation") });
-  expect(store.getAgentThread("pr-1")).toBe("fresh-hidden-worker");
-  expect(store.listAgentMessages("pr-1").map((message) => message.text)).toEqual(["Earlier explanation", "Continue the review", "New answer"]);
-});
-
-test("a thread lookup failure keeps its mapping and does not create another worker", async () => {
-  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: {
-    get: async () => { throw new Error("Connection unavailable"); }, stop: async () => {},
-  } } });
-  const store = createStore(bb);
-  store.setAgentThread("pr-1", "existing");
-  await expect(runAgentTurn(bb, store, { targetKey: "pr-1", projectId: "p1", message: "Continue" })).rejects.toThrow("Connection unavailable");
-  expect(store.getAgentThread("pr-1")).toBe("existing");
-  expect(harness.inspection.sdk.callsTo("threads.spawn")).toHaveLength(0);
-});
-
-test("a new answer on an archived review finishes before its fresh worker is archived", async () => {
-  let finish!: () => void;
-  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: {
-    get: async () => ({ archivedAt: 123, deletedAt: null }),
-    spawn: async () => ({ id: "fresh" }), wait: () => new Promise<void>((resolve) => { finish = resolve; }),
-    output: async () => "Finished answer", stop: async () => {}, archive: async () => {}, update: async () => {},
-  } } });
-  const store = createStore(bb);
-  store.saveReview({ targetKey: "pr-1", kind: "pr", repo: "a/b", number: 1, status: "ready", createdAt: 1 });
-  store.setLifecycle("pr-1", { prState: "MERGED", archivedAt: 123 });
-  store.setAgentThread("pr-1", "archived-worker");
-  const args = { targetKey: "pr-1", projectId: "p1", message: "One more question" };
-  const answer = runAgentTurn(bb, store, args);
-  await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
-  await expect(runAgentTurn(bb, store, args)).rejects.toThrow("already in progress");
-  const sync = createReviewSync(bb, store, vi.fn());
-  await sync.one("pr-1", true);
-  expect(harness.inspection.sdk.callsTo("threads.archive")).toHaveLength(0);
-  expect(harness.inspection.sdk.callsTo("threads.stop")).toHaveLength(0);
-  finish();
-  await expect(answer).resolves.toEqual({ answer: "Finished answer" });
-  expect(harness.inspection.sdk.callsTo("threads.archive")).toEqual([[{ threadId: "fresh" }]]);
-  expect(store.listAgentMessages("pr-1")).toHaveLength(2);
-  expect(store.getReview("pr-1")?.prState).toBe("MERGED");
-});
-
-test("a question arriving during archival waits for cleanup, then starts a fresh hidden worker", async () => {
-  let releaseStop!: () => void;
-  let finishAnswer!: () => void;
-  const archived = new Set<string>();
-  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: {
-    update: async () => {},
-    stop: ({ threadId }: { threadId: string }) => threadId === "old-worker"
-      ? new Promise<void>((resolve) => { releaseStop = resolve; }) : Promise.resolve(),
-    archive: async ({ threadId }: { threadId: string }) => { archived.add(threadId); },
-    get: async ({ threadId }: { threadId: string }) => ({ archivedAt: archived.has(threadId) ? 123 : null, deletedAt: null }),
-    spawn: async () => ({ id: "fresh-worker" }),
-    wait: () => new Promise<void>((resolve) => { finishAnswer = resolve; }),
-    output: async () => "Continued answer",
-  } } });
-  const store = createStore(bb);
-  store.saveReview({ targetKey: "pr-1", kind: "pr", repo: "a/b", number: 1, status: "ready", createdAt: 1 });
-  store.setLifecycle("pr-1", { prState: "MERGED", archivedAt: 123 });
-  store.setAgentThread("pr-1", "old-worker");
-  store.appendAgentMessage("pr-1", "assistant", "Earlier explanation");
-  const cleanup = createReviewSync(bb, store, vi.fn()).one("pr-1");
-  await vi.waitFor(() => expect(releaseStop).toBeTypeOf("function"));
-
-  const args = { targetKey: "pr-1", projectId: "p1", message: "Continue" };
-  const answer = runAgentTurn(bb, store, args);
-  expect(harness.inspection.sdk.callsTo("threads.get")).toHaveLength(0);
-  await expect(runAgentTurn(bb, store, args)).rejects.toThrow("already in progress");
-  releaseStop();
-  await cleanup;
-  await vi.waitFor(() => expect(finishAnswer).toBeTypeOf("function"));
-  expect(harness.inspection.sdk.callsTo("threads.send")).toHaveLength(0);
-  expect(harness.inspection.sdk.callsTo("threads.spawn")[0][0]).toMatchObject({ visibility: "hidden", prompt: expect.stringContaining("Earlier explanation") });
-  expect([...archived]).toEqual(["old-worker"]);
-  expect(store.getAgentThread("pr-1")).toBe("fresh-worker");
-  finishAnswer();
-  await expect(answer).resolves.toEqual({ answer: "Continued answer" });
-  expect([...archived]).toEqual(["old-worker", "fresh-worker"]);
-});
-
-test("a delayed missing-worker cleanup cannot erase the next question's replacement mapping", async () => {
-  let failUpdate!: (error: Error) => void;
-  let finishAnswer!: () => void;
-  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: {
-    update: () => new Promise<void>((_resolve, reject) => { failUpdate = reject; }),
-    get: async () => ({ archivedAt: null, deletedAt: 123 }),
-    spawn: async () => ({ id: "fresh-worker" }),
-    wait: () => new Promise<void>((resolve) => { finishAnswer = resolve; }),
-    output: async () => "Continued answer", stop: async () => {}, archive: async () => {},
-  } } });
-  const store = createStore(bb);
-  store.saveReview({ targetKey: "pr-1", kind: "pr", repo: "a/b", number: 1, status: "ready", createdAt: 1 });
-  store.setLifecycle("pr-1", { prState: "MERGED", archivedAt: 123 });
-  store.setAgentThread("pr-1", "deleted-worker");
-  const cleanup = createReviewSync(bb, store, vi.fn()).one("pr-1");
-  await vi.waitFor(() => expect(failUpdate).toBeTypeOf("function"));
-  const answer = runAgentTurn(bb, store, { targetKey: "pr-1", projectId: "p1", message: "Continue" });
-  expect(harness.inspection.sdk.callsTo("threads.get")).toHaveLength(0);
-  failUpdate(new Error("HTTP 404: Thread not found"));
-  await cleanup;
-  await vi.waitFor(() => expect(finishAnswer).toBeTypeOf("function"));
-  expect(store.getAgentThread("pr-1")).toBe("fresh-worker");
+  // Project defaults choose no permission mode, so bb resolves the provider's own.
+  expect(spawn).not.toHaveProperty("permissionMode");
+  expect(store.getAssistantThread("pr-1")).toBe("worker");
+  await expect(startConversation(bb, store, { targetKey: "pr-1", text: "Again", agent: opus })).rejects.toThrow(/already has a conversation/);
   expect(harness.inspection.sdk.callsTo("threads.spawn")).toHaveLength(1);
-  finishAnswer();
-  await expect(answer).resolves.toEqual({ answer: "Continued answer" });
-  expect(store.getAgentThread("pr-1")).toBe("fresh-worker");
+});
+
+test("the Settings default supplies its permission mode only for its own provider", async () => {
+  const { bb, harness, store } = host();
+  store.savePreferences({ ...defaultPreferences, assistantAgent: { ...opus, permissionMode: "full" } }, 0);
+  store.saveReview({ targetKey: "pr-2", kind: "pr", status: "ready", createdAt: 1, projectId: "p1" });
+  await startConversation(bb, store, { targetKey: "pr-1", text: "Why?", agent: { ...opus, model: "sonnet" } });
+  await startConversation(bb, store, { targetKey: "pr-2", text: "Why?", agent: { providerId: "codex", model: "gpt-6", reasoningLevel: "low", serviceTier: "fast" } });
+  const [same, other] = harness.inspection.sdk.callsTo("threads.spawn").map(([args]) => args as any);
+  expect(same).toMatchObject({ providerId: "claude-code", model: "sonnet", permissionMode: "full", executionInputSources: { permissionMode: "explicit" } });
+  expect(other).toMatchObject({ providerId: "codex", serviceTier: "fast", executionInputSources: { serviceTier: "explicit" } });
+  expect(other).not.toHaveProperty("permissionMode");
+});
+
+test("a legacy conversation stays visible, reaches the agent as hidden history, and retires its worker", async () => {
+  const { bb, harness, store } = host();
+  legacyConversation(bb, "legacy-worker", [["user", "Earlier question"], ["assistant", "Earlier answer"]]);
+  await startConversation(bb, store, { targetKey: "pr-1", text: "Go on", agent: opus });
+  const [spawn] = harness.inspection.sdk.callsTo("threads.spawn")[0] as [any];
+  expect(spawn.input[1]).toEqual({ type: "text", visibility: "agent-only", mentions: [], text: "Previous review conversation:\nuser: Earlier question\n\nassistant: Earlier answer" });
+  expect(harness.inspection.sdk.callsTo("threads.archive")).toEqual([[{ threadId: "legacy-worker" }]]);
+  expect(store.getAgentThread("pr-1")).toBeNull();
+  expect((await getConversation(bb, store, "pr-1")).legacy.map((message) => message.text)).toEqual(["Earlier question", "Earlier answer"]);
+});
+
+test("a live thread continues; otherwise the conversation starts from the Settings or project default", async () => {
+  const projectDefaults = { providerId: "codex", model: "gpt-6-astra", reasoningLevel: "low", permissionMode: "auto", serviceTier: "default" };
+  const { bb, harness, store } = host({}, { defaultExecutionOptions: async ({ projectId }: { projectId: string }) => projectId === "p1" ? projectDefaults : null });
+  store.setAssistantThread("pr-1", "worker");
+  expect(await getConversation(bb, store, "pr-1")).toEqual({ threadId: "worker", legacy: [], defaults: null });
+
+  harness.inspection.sdk.stub("threads.get", async () => ({ archivedAt: 123, deletedAt: null }));
+  expect(await getConversation(bb, store, "pr-1")).toEqual({ threadId: null, legacy: [], defaults: { providerId: "codex", model: "gpt-6-astra", reasoningLevel: "low", serviceTier: "default" } });
+  expect(store.getAssistantThread("pr-1")).toBeNull();
+
+  store.savePreferences({ ...defaultPreferences, assistantAgent: { ...opus, permissionMode: "full" } }, 0);
+  expect((await getConversation(bb, store, "pr-1")).defaults).toEqual(opus);
+
+  store.setAssistantThread("pr-1", "deleted");
+  harness.inspection.sdk.stub("threads.get", async () => { throw new Error("HTTP 404: Thread not found"); });
+  expect((await getConversation(bb, store, "pr-1")).threadId).toBeNull();
+
+  store.setAssistantThread("pr-1", "unreachable");
+  harness.inspection.sdk.stub("threads.get", async () => { throw new Error("Connection unavailable"); });
+  await expect(getConversation(bb, store, "pr-1")).rejects.toThrow("Connection unavailable");
+  expect(store.getAssistantThread("pr-1")).toBe("unreachable");
+});
+
+test("New conversation archives the thread and clears the legacy transcript", async () => {
+  const { bb, harness, store } = host({ archive: async ({ threadId }: { threadId: string }) => { if (threadId === "worker") throw new Error("Connection unavailable"); } });
+  legacyConversation(bb, "legacy-worker", [["user", "Earlier question"]]);
+  store.setAssistantThread("pr-1", "worker");
+  await newConversation(bb, store, "pr-1");
+  expect(harness.inspection.sdk.callsTo("threads.archive").map(([args]) => (args as any).threadId)).toEqual(["worker", "legacy-worker"]);
+  expect([store.getAssistantThread("pr-1"), store.getAgentThread("pr-1"), store.listAgentMessages("pr-1")]).toEqual([null, null, []]);
+});
+
+test("instructions carry the review's current guide and preferences, trimmed to bb's limit", () => {
+  const text = assistantInstructions("pr-1", guide("Retries failed refreshes") as any, { ...defaultPreferences, assistantInstructions: "Focus on security" });
+  for (const part of ['"pr-1"', "read_review_patch", "untrusted", "Focus on security", "Retries failed refreshes", "- Retry: Retries once."]) expect(text).toContain(part);
+  const long = assistantInstructions("pr-1", { ...guide("Big"), sections: Array.from({ length: 200 }, (_, i) => ({ id: `s${i}`, title: `Chapter ${i}`, overview: "x".repeat(100), diffs: [] })) } as any, defaultPreferences);
+  expect(long.length).toBe(4000);
+  expect(long.endsWith("…")).toBe(true);
+  expect(long).toContain("Answer concisely");
+});
+
+function reviewAgentContext(pluginMetadata: Record<string, string>): PluginAgentConfigurationContext {
+  return {
+    pluginMetadata,
+    thread: { id: "worker", title: "Review agent: pr-1", parentThreadId: null, sourceThreadId: null },
+    project: { id: "p1", kind: "personal", name: "Personal", gitRemoteUrl: null },
+    environment: { id: "env-1", name: null, path: null, workspaceProvisionType: "unmanaged", branchName: null },
+    host: { id: "host-1", name: "test-host" },
+    provider: { id: "claude-code", model: "opus", capabilities: { supportsNativeUserQuestion: false } },
+    origin: { kind: null, pluginId: "guided-review" },
+  } as PluginAgentConfigurationContext;
+}
+
+test("the assistant gets its review's current instructions, without private notes, and only the read tool", async () => {
+  const { bb, harness, store } = host();
+  await plugin(bb);
+  store.saveReviewerNotes("pr-1", "PRIVATE-SCRATCHPAD", 0);
+  store.savePreferences({ ...defaultPreferences, assistantInstructions: "Focus on security" }, 0);
+  store.saveGuide("pr-1", guide("Old behavior") as any);
+  store.saveGuide("pr-1", guide("New retry behavior") as any);
+  const mine = await harness.behavior.resolveAgentConfiguration(reviewAgentContext({ targetKey: "pr-1" }));
+  expect(mine.tools.map((tool) => tool.name)).toEqual(["read_review_patch"]);
+  expect(mine.skills).toEqual([]);
+  expect(mine.instructions).toContain("New retry behavior");
+  expect(mine.instructions).toContain("Focus on security");
+  expect(mine.instructions).not.toMatch(/Old behavior|PRIVATE-SCRATCHPAD/);
+  expect((await harness.behavior.resolveAgentConfiguration(reviewAgentContext({ targetKey: "pr-unknown" }))).instructions).toBeNull();
+});
+
+test("idle assistants restart for new instructions after Re-review or a preferences change; busy ones finish", async () => {
+  const { bb, harness, store } = host({ get: async ({ threadId }: { threadId: string }) => ({ archivedAt: null, deletedAt: null, status: threadId === "busy" ? "active" : "idle" }) });
+  await plugin(bb);
+  store.saveReview({ targetKey: "pr-2", kind: "pr", status: "ready", createdAt: 1, projectId: "p1" });
+  store.setAssistantThread("pr-1", "idle");
+  store.setAssistantThread("pr-2", "busy");
+  await refreshAssistants(bb, store, ["pr-2"]);
+  expect(harness.inspection.sdk.callsTo("threads.stop")).toEqual([]);
+  await refreshAssistants(bb, store);
+  expect(harness.inspection.sdk.callsTo("threads.stop")).toEqual([[{ threadId: "idle" }]]);
+
+  const { revision } = store.getPreferences();
+  await harness.behavior.callRpc("savePreferences", { preferences: { ...defaultPreferences, diffLayout: "unified" }, revision });
+  expect(harness.inspection.sdk.callsTo("threads.stop")).toHaveLength(1);
+  await harness.behavior.callRpc("savePreferences", { preferences: { ...defaultPreferences, diffLayout: "unified", assistantInstructions: "Be brief" }, revision: revision + 1 });
+  await expect.poll(() => harness.inspection.sdk.callsTo("threads.stop")).toHaveLength(2);
+});
+
+test("a finished guide restarts the review's idle assistant so it reads the new guide", async () => {
+  let finishGuide = () => {};
+  const { bb, harness, store } = host({ wait: async () => finishGuide() });
+  finishGuide = () => store.saveGuide("pr-1", guide("New retry behavior") as any);
+  store.setAssistantThread("pr-1", "assistant");
+  await generateGuide(bb, store, "pr-1", "p1");
+  expect(store.getReview("pr-1")?.status).toBe("ready");
+  await expect.poll(() => harness.inspection.sdk.callsTo("threads.stop").map(([args]) => (args as any).threadId)).toContain("assistant");
 });

@@ -22,11 +22,10 @@ test.skipIf(!process.env.BB_E2E_URL)("fullscreen verdict → submitted → reloa
     return { code: 0, stderr: "", stdout: JSON.stringify({ headRefOid: "sha1", state: prState }) };
   });
   let workerCount = 0;
-  const archivedWorkers = new Set<string>();
   const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: {
-    get: async ({ threadId }) => ({ archivedAt: archivedWorkers.has(threadId) ? Date.now() : null, deletedAt: null }),
-    spawn: async () => ({ id: `e2e-hidden-agent-${++workerCount}` }), wait: async () => {}, output: async () => workerCount === 1 ? "The guard validates the incoming value before saving it." : "The archived conversation continues in a fresh worker.",
-    stop: async () => ({}), update: async () => ({}), archive: async ({ threadId }) => { archivedWorkers.add(threadId); return {}; },
+    get: async () => ({ archivedAt: null, deletedAt: null, status: "idle" }),
+    spawn: async () => ({ id: `e2e-hidden-agent-${++workerCount}` }),
+    stop: async () => ({}), update: async () => ({}), archive: async () => ({}),
   } } });
   await plugin(bb);
   const store = createStore(bb);
@@ -175,11 +174,11 @@ test.skipIf(!process.env.BB_E2E_URL)("fullscreen verdict → submitted → reloa
     await page.getByRole("button", { name: "Ask agent", exact: true }).click();
     expect(await page.getByRole("textbox", { name: "Ask the agent", exact: true }).inputValue()).toBe("Explain the validation guard");
     await page.getByRole("button", { name: "Send", exact: true }).click();
-    await page.getByText("The guard validates the incoming value before saving it.").waitFor();
-    expect(harness.inspection.sdk.callsTo("threads.spawn")[0][0]).toMatchObject({ visibility: "hidden", prompt: expect.stringContaining("Focus on concrete failure cases.") });
+    // bb's ThreadChat takes over. The stubbed worker id has no thread in this bb.
+    await assistant.getByText("This thread is no longer available.").waitFor();
+    expect(harness.inspection.sdk.callsTo("threads.spawn")[0][0]).toMatchObject({ visibility: "hidden", title: `Review agent: ${key}`, pluginMetadata: { targetKey: key },
+      input: [{ type: "text", text: "Explain the validation guard\n\nAbout `src/input.ts`." }] });
     expect(JSON.stringify(harness.inspection.sdk.callsTo("threads.spawn"))).not.toContain("Private: verify");
-    expect(JSON.stringify(harness.inspection.sdk.callsTo("threads.spawn"))).toContain("Focused file src/input.ts");
-    expect(harness.inspection.sdk.callsTo("threads.stop")).toHaveLength(1);
     await page.screenshot({ animations: "disabled", path: `${dir}/assistant-panel.png` });
     expect(await page.getByText("Open as thread", { exact: true }).count()).toBe(0);
     await page.evaluate(() => document.exitFullscreen());
@@ -198,7 +197,8 @@ test.skipIf(!process.env.BB_E2E_URL)("fullscreen verdict → submitted → reloa
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await page.getByText("No submitted reviews yet", { exact: true }).waitFor();
     expect(store.getReview(key)?.archivedAt).toBeTypeOf("number");
-    expect(harness.inspection.sdk.callsTo("threads.archive")).toHaveLength(1);
+    // bb cannot send to an archived thread, so the assistant chat stays unarchived.
+    expect(harness.inspection.sdk.callsTo("threads.archive")).toHaveLength(0);
     await page.getByRole("group", { name: "Filter reviews" }).getByRole("button", { name: /^Archive/ }).click();
     await page.getByText("Merged", { exact: true }).waitFor();
     await page.screenshot({ animations: "disabled", path: `${dir}/archive-desktop.png` });
@@ -208,18 +208,12 @@ test.skipIf(!process.env.BB_E2E_URL)("fullscreen verdict → submitted → reloa
     expect(await page.getByRole("button", { name: "Submit to GitHub" }).count()).toBe(0);
     expect(await page.getByRole("button", { name: "Re-review", exact: true }).count()).toBe(0);
     await page.getByRole("button", { name: "Ask agent", exact: true }).click();
-    await page.getByText("The guard validates the incoming value before saving it.").waitFor();
-    await page.getByRole("textbox", { name: "Ask the agent", exact: true }).fill("Continue after archival");
-    await page.getByRole("button", { name: "Send", exact: true }).click();
-    await page.getByText("The archived conversation continues in a fresh worker.").waitFor();
-    expect(harness.inspection.sdk.callsTo("threads.spawn")).toHaveLength(2);
-    expect(harness.inspection.sdk.callsTo("threads.spawn")[1][0]).toMatchObject({ visibility: "hidden", prompt: expect.stringContaining("The guard validates") });
-    expect(harness.inspection.sdk.callsTo("threads.send")).toHaveLength(0);
-    expect(archivedWorkers.has("e2e-hidden-agent-2")).toBe(true);
+    await assistant.getByText("This thread is no longer available.").waitFor();
+    expect(harness.inspection.sdk.callsTo("threads.spawn")).toHaveLength(1);
     await page.setViewportSize({ width: 390, height: 844 });
     await page.reload();
     await assistant.waitFor();
-    await page.getByText("The archived conversation continues in a fresh worker.").waitFor();
+    await assistant.getByText("This thread is no longer available.").waitFor();
     expect(await assistant.evaluate((element) => element.getBoundingClientRect().right <= innerWidth)).toBe(true);
     await page.screenshot({ animations: "disabled", path: `${dir}/assistant-mobile.png` });
     await page.getByRole("button", { name: "All reviews", exact: true }).click();

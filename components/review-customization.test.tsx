@@ -101,7 +101,7 @@ test("the review activity rail collapses each tool without losing editor state",
   const slot = renderSlot({ component: (props: any) => <DraftTray {...props} /> }, { targetKey: "sidebar-editors", activeChapterId: "c1", activeFiles: ["a.ts"], agent: {} }, { rpc: {
     getDraft: () => ({ draft: { targetKey: "sidebar-editors", verdict: "COMMENT", body: "", comments: [] } }),
     getReviewerNotes: () => ({ body: "", revision: 0 }), saveReviewerNotes: ({ body }: any) => ({ body, revision: 1 }),
-    getAgentMessages: () => ({ messages: [] }),
+    getConversation: () => ({ threadId: null, legacy: [], defaults: null }),
   } });
   fireEvent.click(await slot.findByRole("button", { name: "Add comment" }));
   fireEvent.change(slot.getByRole("textbox", { name: "Draft comment" }), { target: { value: "Keep this unfinished comment" } });
@@ -165,5 +165,48 @@ test("a new line-comment request reveals an unfinished comment without replacing
   expect(editor.value).toBe("Keep this unfinished comment");
   expect((slot.getByRole("textbox", { name: "Comment file" }) as HTMLInputElement).value).toBe("a.ts");
   await waitFor(() => expect(document.activeElement).toBe(editor));
+  slot.lifecycle.unmount();
+});
+
+test("each agent uses project defaults until customized with bb's pickers", async () => {
+  await loadPluginApp(() => import("../app"));
+  const { ReviewSettings } = await import("./ReviewSettings");
+  let record = { preferences: { ...defaultPreferences }, revision: 0 };
+  const save = vi.fn(async (input: any) => record = { ...input, revision: input.revision + 1 });
+  const defaults = { providerId: "codex", model: "gpt-6-astra", reasoningLevel: "low", permissionMode: "auto", serviceTier: "default" };
+  const getAgentDefaults = vi.fn().mockResolvedValueOnce({ defaults }).mockRejectedValueOnce(new Error("Offline"));
+  const slot = renderSlot({ component: ReviewSettings }, {}, { rpc: { setReviewPresence: () => ({ ok: true }), getPreferences: () => record, savePreferences: save, getAgentDefaults } });
+  const guide = await slot.findByRole("group", { name: "Guide writer agent" });
+  const assistant = slot.getByRole("group", { name: "Review assistant agent" });
+  expect(within(guide).getByRole("button", { name: "Project defaults" }).getAttribute("aria-pressed")).toBe("true");
+  expect(slot.queryByTestId("bb-provider-model-picker")).toBeNull();
+
+  // Custom starts from the personal project's defaults.
+  fireEvent.click(within(guide).getByRole("button", { name: "Custom" }));
+  const picker = await slot.findByTestId("bb-provider-model-picker");
+  expect((within(picker).getByRole("textbox", { name: "Model" }) as HTMLInputElement).value).toBe("gpt-6-astra");
+  fireEvent.change(within(picker).getByRole("textbox", { name: "Model" }), { target: { value: "gpt-6" } });
+  fireEvent.change(within(picker).getByRole("textbox", { name: "Reasoning level" }), { target: { value: "high" } });
+  fireEvent.change(within(picker).getByRole("combobox", { name: "Service tier" }), { target: { value: "fast" } });
+  fireEvent.click(within(picker).getByRole("button", { name: "Apply execution selection" }));
+  fireEvent.change(slot.getByRole("combobox", { name: "Permission mode" }), { target: { value: "full" } });
+
+  // Without defaults, saving waits until the pickers resolve a provider and model.
+  fireEvent.click(within(assistant).getByRole("button", { name: "Custom" }));
+  await waitFor(() => expect(slot.getAllByTestId("bb-provider-model-picker")).toHaveLength(2));
+  expect((slot.getByRole("button", { name: "Save settings" }) as HTMLButtonElement).disabled).toBe(true);
+  const second = slot.getAllByTestId("bb-provider-model-picker")[1];
+  fireEvent.change(within(second).getByRole("textbox", { name: "Provider ID" }), { target: { value: "pi" } });
+  fireEvent.change(within(second).getByRole("textbox", { name: "Model" }), { target: { value: "local" } });
+  fireEvent.click(within(second).getByRole("button", { name: "Apply execution selection" }));
+  fireEvent.click(slot.getByRole("button", { name: "Save settings" }));
+  await slot.findByText("Settings saved");
+  expect(record.preferences.guideAgent).toEqual({ providerId: "codex", model: "gpt-6", reasoningLevel: "high", permissionMode: "full", serviceTier: "fast" });
+  expect(record.preferences.assistantAgent).toEqual({ providerId: "pi", model: "local", reasoningLevel: "medium", permissionMode: "auto" });
+
+  fireEvent.click(within(guide).getByRole("button", { name: "Project defaults" }));
+  expect(slot.getAllByTestId("bb-provider-model-picker")).toHaveLength(1);
+  fireEvent.click(slot.getByRole("button", { name: "Save settings" }));
+  await waitFor(() => expect(record.preferences.guideAgent).toBeNull());
   slot.lifecycle.unmount();
 });

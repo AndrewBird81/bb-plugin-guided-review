@@ -28,6 +28,17 @@ test("read_review_patch returns stored patch text", async () => {
   expect(String(out.content?.[0]?.text ?? out)).toContain("diff --git a/a.ts");
 });
 
+test("read_review_patch reads one file's diff on request", async () => {
+  const { harness, store } = await host();
+  store.savePatch("pr-1", patch + patch.replaceAll("a.ts", "b.ts").replace("+new", "+other"));
+  const text = (out: any) => String(out.content?.[0]?.text ?? out);
+  const one = await harness.behavior.callAgentTool("read_review_patch", { targetKey: "pr-1", file: "b.ts" });
+  expect(text(one)).toContain("+other");
+  expect(text(one)).not.toContain("a.ts");
+  const missing = await harness.behavior.callAgentTool("read_review_patch", { targetKey: "pr-1", file: "c.ts" });
+  expect(missing.isError).toBe(true);
+});
+
 test("generate_review_guide rejects incomplete coverage then accepts a full guide", async () => {
   const { harness, generationId } = await host();
   const bad = await harness.behavior.callAgentTool("generate_review_guide", {

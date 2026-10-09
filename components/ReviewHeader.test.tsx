@@ -22,7 +22,7 @@ function renderWorkspace(review: Record<string, unknown>) {
     checkForUpdates: () => ({ hasNewCommits: false }),
     getDraft: () => ({ draft: { targetKey: "pr-42", verdict: "COMMENT", body: "", comments: [] } }),
     getReviewerNotes: () => ({ body: "", revision: 0 }),
-    getAgentMessages: () => ({ messages: [] }),
+    getConversation: () => ({ threadId: null, legacy: [], defaults: null }),
   } }));
 }
 
