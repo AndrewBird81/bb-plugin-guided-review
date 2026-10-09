@@ -1,6 +1,8 @@
-import { memo, useState } from "react";
+import { memo, useState, type ReactNode } from "react";
+import { UrlLink } from "@get-bb/plugin-sdk/app";
 import { reviewState } from "../lib/review-state";
 import { cn } from "../lib/utils";
+import { Icon } from "./ui/icon";
 
 type ChecksSummary = { bucket: string; checks: any[] } | null | undefined;
 
@@ -31,6 +33,17 @@ function CiBadge({ checks }: { checks: ChecksSummary }) {
   );
 }
 
+/** Review title that opens its GitHub PR when one is known; place in a flex container. */
+export function ReviewTitleLink({ url, children }: { url?: string; children: ReactNode }) {
+  if (!url) return <span className="truncate">{children}</span>;
+  return (
+    <UrlLink href={url} title="Open on GitHub" className="group flex min-w-0 items-center gap-1.5 rounded-sm">
+      <span className="truncate decoration-muted-foreground/50 underline-offset-4 group-hover:underline">{children}</span>
+      <Icon name="ArrowUpRight" className="size-[1em] shrink-0 text-muted-foreground group-hover:text-foreground" aria-hidden />
+    </UrlLink>
+  );
+}
+
 const INTENT_TOGGLE_THRESHOLD = 160;
 
 export const ReviewHeader = memo(function ReviewHeader({
@@ -49,8 +62,8 @@ export const ReviewHeader = memo(function ReviewHeader({
   return (
     <header className="space-y-1">
       <div className="flex items-center gap-2">
-        <h2 className="min-w-0 flex-1 truncate text-base font-semibold text-foreground">
-          {review.title ?? review.gitRef ?? review.targetKey}
+        <h2 className="flex min-w-0 flex-1 text-base font-semibold text-foreground">
+          <ReviewTitleLink url={review.url}>{review.title ?? review.gitRef ?? review.targetKey}</ReviewTitleLink>
         </h2>
         <div className="flex shrink-0 items-center gap-2">
           <CiBadge checks={checks} />

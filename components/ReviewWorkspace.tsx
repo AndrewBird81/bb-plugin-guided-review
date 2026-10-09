@@ -9,7 +9,7 @@ import { useMediaQuery } from "./ui/hooks/use-media-query";
 import { getReviewState, patchReviewState, setLastReview } from "../lib/panel-state";
 import { Button } from "./ui/button";
 import { Icon } from "./ui/icon";
-import { ReviewHeader } from "./ReviewHeader";
+import { ReviewHeader, ReviewTitleLink } from "./ReviewHeader";
 import { ChapterNav } from "./ChapterNav";
 import { DiffViewer, type FileViewFlags } from "./DiffViewer";
 import { DraftTray, type CommentPrefill } from "./DraftTray";
@@ -361,8 +361,8 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
       {focus ? (
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
           <Icon name="GitPullRequest" className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-            {review?.title ?? guide.title ?? targetKey}
+          <span className="flex min-w-0 flex-1 text-sm font-medium text-foreground">
+            <ReviewTitleLink url={review?.url}>{review?.title ?? guide.title ?? targetKey}</ReviewTitleLink>
           </span>
           {generatingReplacement && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">Regenerating the guide. Your previous diff and unsaved edits remain visible.</p>}
           {!review?.archivedAt && <RereviewBanner targetKey={targetKey} />}
