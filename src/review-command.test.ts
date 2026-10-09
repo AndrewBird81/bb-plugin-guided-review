@@ -43,3 +43,12 @@ test("bb review reports an offline guide writer machine without starting a revie
     .toEqual({ exitCode: 1, stderr: "FloMac is offline. Wake it, or choose another machine for the guide writer in Review settings." });
   expect(store.getReview(key)).toBeNull();
 });
+
+test("bb review --help names both forms without starting a review", async () => {
+  const { bb } = createFakePluginHost({ pluginId: "guided-review" });
+  const store = createStore(bb);
+  for (const argv of [["--help"], ["-h"], ["main", "--help"]]) {
+    expect(await runReviewCommand({ bb, store, gh }, argv, { projectId: "p1", cwd: "/repo" })).toMatchObject({ exitCode: 0, stdout: expect.stringContaining("bb review comment") });
+  }
+  expect(store.listReviews()).toEqual([]);
+});

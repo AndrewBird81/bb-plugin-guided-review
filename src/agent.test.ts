@@ -128,8 +128,8 @@ test("the assistant gets its review's current instructions, without private note
   store.saveGuide("pr-1", guide("Old behavior") as any);
   store.saveGuide("pr-1", guide("New retry behavior") as any);
   const mine = await harness.behavior.resolveAgentConfiguration(reviewAgentContext({ targetKey: "pr-1" }));
-  expect(mine.tools.map((tool) => tool.name)).toEqual(["read_review_patch", "add_draft_comment"]);
-  expect(mine.tools[1].instructions).toMatch(/Prefer this to a general remark.*Never post to GitHub yourself/s);
+  expect(mine.tools.map((tool) => tool.name)).toEqual(["read_review_patch", "list_draft_comments", "add_draft_comment", "edit_draft_comment", "delete_draft_comment"]);
+  expect(mine.tools.find((tool) => tool.name === "add_draft_comment")?.instructions).toMatch(/Prefer this to a general remark.*reviewer's own comments only when they ask.*Never post to GitHub yourself/s);
   expect(mine.skills).toEqual([]);
   expect(mine.instructions).toContain("New retry behavior");
   expect(mine.instructions).toContain("Focus on security");

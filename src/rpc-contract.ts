@@ -93,7 +93,7 @@ export const rpcContract = defineRpcContract({
     output: z.object({ draft: z.any() }),
   },
   removeDraftComment: {
-    input: z.object({ targetKey: z.string(), index: z.number().int().min(0) }).strict(),
+    input: z.object({ targetKey: z.string(), file: z.string(), line: z.number().int(), side: z.enum(["LEFT", "RIGHT"]) }).strict(),
     output: z.object({ draft: z.any() }),
   },
   setVerdict: {

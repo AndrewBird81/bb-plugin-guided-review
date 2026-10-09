@@ -308,3 +308,21 @@ test("an assistant's comment appears in an open draft, and Submit sends only the
   await waitFor(() => expect(submitReview).toHaveBeenCalledWith({ targetKey: "live", revision: "r1", account: "reviewer", comments: [mine, theirs] }));
   slot.lifecycle.unmount();
 });
+
+test("a draft labels agents' comments, and Remove names the comment's location", async () => {
+  await loadPluginApp(() => import("../app"));
+  const { DraftTray } = await import("./DraftTray");
+  const mine = { file: "a.ts", line: 1, side: "RIGHT", body: "My comment" };
+  const theirs = { file: "a.ts", line: 2, side: "LEFT", author: "agent", body: "The agent's comment" };
+  const draft = { targetKey: "labels", verdict: "COMMENT", body: "", comments: [mine, theirs] };
+  const removeDraftComment = vi.fn(() => ({ draft: { ...draft, comments: [mine] } }));
+  const slot = renderSlot({ component: (props: any) => <DraftTray {...props} /> }, { targetKey: "labels", activeChapterId: "c1", activeFiles: ["a.ts"] }, { rpc: {
+    setReviewPresence: () => ({ ok: true }), getReviewerNotes: () => ({ body: "", revision: 0 }), getDraft: () => ({ draft }), removeDraftComment,
+  } });
+  await slot.findByText("a.ts:2 · Original · Added by agent");
+  expect(slot.getByText("a.ts:1 · Changed")).toBeTruthy();
+  fireEvent.click(slot.getByRole("button", { name: "Remove comment on a.ts:2" }));
+  await waitFor(() => expect(removeDraftComment).toHaveBeenCalledWith({ targetKey: "labels", file: "a.ts", line: 2, side: "LEFT" }));
+  await waitFor(() => expect(slot.queryByText("The agent's comment")).toBeNull());
+  slot.lifecycle.unmount();
+});

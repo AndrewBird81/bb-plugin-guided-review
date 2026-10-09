@@ -1,6 +1,6 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Guide } from "./guide";
-import type { Draft, DraftComment, Verdict } from "./draft";
+import { sameLocation, type CommentLocation, type Draft, type DraftComment, type Verdict } from "./draft";
 import { createHash, randomUUID } from "node:crypto";
 import { defaultPreferences, preferencesSchema, type PreferencesRecord, type ReviewPreferences, type ReviewerNotesRecord } from "./preferences";
 
@@ -79,7 +79,10 @@ export interface Store {
   interruptGenerations(): void;
   getDraft(targetKey: string): Draft;
   upsertDraftComment(targetKey: string, c: DraftComment): Draft;
-  removeDraftComment(targetKey: string, index: number): Draft;
+  /** Change only a comment's text, keeping who added it and the diff it was drafted against. Null when there's no comment there. */
+  editDraftComment(targetKey: string, at: CommentLocation, body: string): Draft | null;
+  /** Null when there's no comment there. */
+  deleteDraftComment(targetKey: string, at: CommentLocation): Draft | null;
   setVerdict(targetKey: string, verdict: Verdict, body: string): Draft;
   staleDraftComments(targetKey: string): DraftComment[];
   clearSubmittedDraft(draft: Draft): void;
@@ -259,8 +262,18 @@ export function createStore(bb: BbPluginApi): Store {
         .run(k, c.file, c.line, c.side, patchHash(patch));
       return d;
     },
-    removeDraftComment(k, index) {
+    editDraftComment(k, at, body) {
       const d = this.getDraft(k);
+      const comment = d.comments.find((c) => sameLocation(c, at));
+      if (!comment) return null;
+      comment.body = body;
+      writeDraft(db, d);
+      return d;
+    },
+    deleteDraftComment(k, at) {
+      const d = this.getDraft(k);
+      const index = d.comments.findIndex((c) => sameLocation(c, at));
+      if (index < 0) return null;
       d.comments.splice(index, 1);
       writeDraft(db, d);
       return d;

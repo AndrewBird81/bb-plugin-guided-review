@@ -3,7 +3,7 @@
 // Turns a GitHub PR (or local git ref) into an agent-authored chaptered
 // walkthrough, rendered and reviewed in a bb panel, submitted back to GitHub.
 // This factory is extended task-by-task (store, cli, tools, rpc, realtime).
-import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import type { BbPluginApi, PluginAgentToolResult } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { rpcContract } from "./src/rpc-contract";
 import { createStore } from "./src/store";
@@ -13,7 +13,8 @@ import { runReviewCommand } from "./src/review-command";
 import { createPrReview } from "./src/start-review";
 import { assistantInstructions, getConversation, isAssistantAnswering, newConversation, refreshAssistants, startConversation } from "./src/agent";
 import { listMachines } from "./src/machines";
-import { addAgentComment } from "./src/agent-comments";
+import { addComment, assistantReview, deleteComment, describeComments, editComment, type DraftResult } from "./src/draft-comments";
+import { runCommentCommand } from "./src/comment-command";
 import { isMissingThread } from "./src/thread-errors";
 import { computeFileViewState, hashForFile } from "./src/file-views";
 import {
@@ -246,8 +247,9 @@ export default async function plugin(bb: BbPluginApi) {
       requireReviewRevision(store, targetKey, revision);
       return { draft: store.upsertDraftComment(targetKey, comment) };
     },
-    removeDraftComment({ targetKey, index }) {
-      return { draft: store.removeDraftComment(targetKey, index) };
+    removeDraftComment({ targetKey, file, line, side }) {
+      // Already gone, for example deleted by an agent: the current draft shows that.
+      return { draft: store.deleteDraftComment(targetKey, { file, line, side }) ?? store.getDraft(targetKey) };
     },
     setVerdict({ targetKey, verdict, body, revision }) {
       requireReviewRevision(store, targetKey, revision);
@@ -340,23 +342,48 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
+  // The review assistant's draft tools act only on its own review's local draft.
+  function assistantDraft(threadId: string, changes: boolean, act: (targetKey: string) => DraftResult): PluginAgentToolResult {
+    const targetKey = assistantReview(store, threadId);
+    const result: DraftResult = targetKey ? act(targetKey) : { ok: false, error: "This conversation is no longer a review's assistant, so it has no draft." };
+    if (!result.ok) return { content: [{ type: "text", text: result.error }], isError: true };
+    if (changes) bb.realtime.publish(`draft:${targetKey}`, {});
+    return result.text;
+  }
+  const location = {
+    file: z.string().describe("Repo-relative path, exactly as the diff shows it."),
+    line: z.number().int().min(1).describe("The line's number in the new file (side RIGHT) or the old file (side LEFT)."),
+    side: z.enum(["RIGHT", "LEFT"]).optional().describe("RIGHT, the default, for an added or unchanged line; LEFT for a removed line."),
+  };
+  const body = z.string().trim().min(1).describe("The comment, in GitHub Markdown.");
+  bb.agents.registerTool({
+    name: "list_draft_comments",
+    description: "List the comments in the reviewer's local draft for this review: each one's location, who added it (an agent or the reviewer), and text.",
+    parameters: z.object({}),
+    execute: (_input, { threadId }) => assistantDraft(threadId, false, (targetKey) => ({ ok: true, text: describeComments(store, targetKey) })),
+  });
   bb.agents.registerTool({
     name: "add_draft_comment",
     description: "Add an inline comment to the reviewer's local draft for this review, on one line of the current diff. Nothing reaches GitHub: the reviewer edits, removes, or submits it. Refuses a line that already has a draft comment.",
-    instructions: "Whenever a comment is warranted, such as a bug, a risk, a missing case, or a question about specific lines, add it with add_draft_comment on the line it concerns. Prefer this to a general remark, because an inline comment keeps the issue's location. Put one issue in each comment. Points about the change as a whole go in your reply. The draft is the reviewer's: they edit, remove, and submit it. Never post to GitHub yourself, for example with gh pr review, gh pr comment, gh api writes, or git push.",
+    instructions: "Whenever a comment is warranted, such as a bug, a risk, a missing case, or a question about specific lines, add it with add_draft_comment on the line it concerns. Prefer this to a general remark, because an inline comment keeps the issue's location. Put one issue in each comment. Points about the change as a whole go in your reply. list_draft_comments shows the draft and who added each comment; edit_draft_comment and delete_draft_comment change it. Change or delete the reviewer's own comments only when they ask. The draft is the reviewer's: they edit, remove, and submit it. Never post to GitHub yourself, for example with gh pr review, gh pr comment, gh api writes, or git push.",
     parameters: z.object({
-      file: z.string().describe("Repo-relative path, exactly as the diff shows it."),
-      line: z.number().int().min(1).describe("The line's number in the new file (side RIGHT) or the old file (side LEFT)."),
-      side: z.enum(["RIGHT", "LEFT"]).optional().describe("RIGHT, the default, for an added or unchanged line; LEFT for a removed line."),
+      ...location,
       code: z.string().describe("The line's text, without the diff's leading +, -, or space. It must match the line."),
-      body: z.string().trim().min(1).describe("The comment, in GitHub Markdown."),
+      body,
     }),
-    async execute(input, { threadId }) {
-      const result = addAgentComment(store, threadId, input);
-      if (!result.ok) return { content: [{ type: "text", text: result.error }], isError: true };
-      bb.realtime.publish(`draft:${result.targetKey}`, {});
-      return result.text;
-    },
+    execute: (input, { threadId }) => assistantDraft(threadId, true, (targetKey) => addComment(store, targetKey, input)),
+  });
+  bb.agents.registerTool({
+    name: "edit_draft_comment",
+    description: "Replace the text of the draft comment at a file, line, and side in the reviewer's local draft. Its location stays; to move a comment, delete it and add it again. Nothing reaches GitHub.",
+    parameters: z.object({ ...location, body }),
+    execute: (input, { threadId }) => assistantDraft(threadId, true, (targetKey) => editComment(store, targetKey, input)),
+  });
+  bb.agents.registerTool({
+    name: "delete_draft_comment",
+    description: "Delete the draft comment at a file, line, and side from the reviewer's local draft. Nothing reaches GitHub.",
+    parameters: z.object(location),
+    execute: (input, { threadId }) => assistantDraft(threadId, true, (targetKey) => deleteComment(store, targetKey, input)),
   });
 
   bb.agents.registerTool({
@@ -393,14 +420,14 @@ export default async function plugin(bb: BbPluginApi) {
       return { tools: ["read_review_patch", "generate_review_guide"], skills: ["guided-review-generate"] };
     }
     // The review assistant can read any file's diff on demand, so the chat
-    // works across the whole review, and add comments to its own review's
-    // local draft — but it never gets the guide-writing tool or the generation
+    // works across the whole review, and change its own review's local draft
+    // comments — but it never gets the guide-writing tool or the generation
     // skill. Its review context arrives as instructions.
     if (title.startsWith("Review agent:")) {
       const { targetKey } = context.pluginMetadata;
       const review = typeof targetKey === "string" ? store.getReview(targetKey) : null;
       return {
-        tools: ["read_review_patch", "add_draft_comment"], skills: [],
+        tools: ["read_review_patch", "list_draft_comments", "add_draft_comment", "edit_draft_comment", "delete_draft_comment"], skills: [],
         ...(review ? { instructions: assistantInstructions(review.targetKey, store.getGuide(review.targetKey), store.getPreferences().preferences) } : {}),
       };
     }
@@ -409,10 +436,16 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.cli.register({
     name: "review",
-    summary: "Open a Guided Review of a GitHub PR or local git ref",
-    commands: [{ name: "review", summary: "Review a PR or ref", usage: "bb review <pr-url | pr-number | git-ref> [--base <ref>]" }],
+    summary: "Open a Guided Review of a GitHub PR or local git ref, or change its local draft comments",
+    rendersHelp: true,
+    commands: [
+      { name: "review", summary: "Review a PR or ref", usage: "bb review <pr-url | pr-number | git-ref> [--base <ref>]" },
+      { name: "comment", summary: "List, add, edit, or delete a review's local draft comments; never posts to GitHub", usage: "bb review comment <list | add | edit | delete> <review> [<file>:<line>] [--side LEFT|RIGHT] [--code <text>] [--body <text>] [--json]" },
+    ],
     async run(argv, ctx) {
-      return updates.run(() => runReviewCommand({ bb, store, gh: { runGh, runGit } }, argv, ctx));
+      return updates.run(() => argv[0] === "comment"
+        ? runCommentCommand(store, argv.slice(1), (targetKey) => bb.realtime.publish(`draft:${targetKey}`, {}))
+        : runReviewCommand({ bb, store, gh: { runGh, runGit } }, argv, ctx));
     },
   });
 }

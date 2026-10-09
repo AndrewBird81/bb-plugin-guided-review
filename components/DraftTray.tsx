@@ -186,9 +186,9 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
       updateComments(result.draft as Draft); setBody(""); setEditing(null); setShowComposer(false);
     });
   }
-  async function removeComment(index: number) {
+  async function removeComment({ file, line, side }: DraftComment) {
     await mutate(async () => {
-      const result = await enqueue(() => rpc.call("removeDraftComment", { targetKey, index }));
+      const result = await enqueue(() => rpc.call("removeDraftComment", { targetKey, file, line, side }));
       updateComments(result.draft as Draft);
     });
   }
@@ -251,10 +251,10 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
           <div className="space-y-3 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2"><span role="status" className="text-xs text-muted-foreground">{saved}</span><Button variant="ghost" size="sm" aria-expanded={showComposer} onClick={() => setShowComposer(true)}><Icon name="Plus" className="size-4" aria-hidden /> Add comment</Button></div>
             {saved.startsWith("Couldn’t") && <Button variant="outline" size="sm" onClick={() => void flush().catch(() => {})}>Save again</Button>}
-            {draft.comments.length ? <ul className="divide-y divide-border text-sm">{draft.comments.map((comment, index) => <li key={`${comment.file}:${comment.line}:${comment.side}`} className="space-y-2 py-3 first:pt-0">
-              <button type="button" className="block w-full break-all text-left text-xs text-muted-foreground hover:text-foreground hover:underline" onClick={() => onSelectFile?.(comment.file)}>{comment.file}:{comment.line} · {comment.side === "LEFT" ? "Original" : "Changed"}</button>
+            {draft.comments.length ? <ul className="divide-y divide-border text-sm">{draft.comments.map((comment) => <li key={`${comment.file}:${comment.line}:${comment.side}`} className="space-y-2 py-3 first:pt-0">
+              <button type="button" className="block w-full break-all text-left text-xs text-muted-foreground hover:text-foreground hover:underline" onClick={() => onSelectFile?.(comment.file)}>{comment.file}:{comment.line} · {comment.side === "LEFT" ? "Original" : "Changed"}{comment.author === "agent" ? " · Added by agent" : ""}</button>
               <p className="whitespace-pre-wrap break-words">{comment.body}</p>
-              <div className="flex gap-1"><Button variant="ghost" size="sm" disabled={busy || !!body.trim()} aria-label={`Edit comment on ${comment.file}:${comment.line}`} onClick={() => { composerRevision.current = revisionRef.current; setEditing(comment); setFile(comment.file); setLine(String(comment.line)); setSide(comment.side); setBody(comment.body); setShowComposer(true); requestAnimationFrame(() => bodyRef.current?.focus()); }}>Edit</Button><Button variant="ghost" size="sm" disabled={busy} aria-label={`Remove comment on ${comment.file}:${comment.line}`} onClick={() => void removeComment(index)}>Remove</Button></div>
+              <div className="flex gap-1"><Button variant="ghost" size="sm" disabled={busy || !!body.trim()} aria-label={`Edit comment on ${comment.file}:${comment.line}`} onClick={() => { composerRevision.current = revisionRef.current; setEditing(comment); setFile(comment.file); setLine(String(comment.line)); setSide(comment.side); setBody(comment.body); setShowComposer(true); requestAnimationFrame(() => bodyRef.current?.focus()); }}>Edit</Button><Button variant="ghost" size="sm" disabled={busy} aria-label={`Remove comment on ${comment.file}:${comment.line}`} onClick={() => void removeComment(comment)}>Remove</Button></div>
             </li>)}</ul> : !showComposer && <p className="py-4 text-sm leading-relaxed text-muted-foreground">Select a line in the diff or add a comment here.</p>}
             {showComposer && <div className="space-y-3 border-t border-border pt-3">
               <label className="block space-y-1 text-xs text-muted-foreground">File<Input aria-label="Comment file" disabled={busy || !!editing} value={file} onChange={(event) => setFile(event.target.value)} /></label>

@@ -112,6 +112,11 @@ test("draft comments upsert and delete", () => {
   let d = s.getDraft("pr-1");
   expect(d.comments).toHaveLength(1);
   expect(d.comments[0].body).toBe("updated");
-  d = s.removeDraftComment("pr-1", 0);
-  expect(d.comments).toHaveLength(0);
+  s.upsertDraftComment("pr-1", { file: "a.ts", line: 2, side: "RIGHT", author: "agent", body: "agent's" });
+  d = s.editDraftComment("pr-1", { file: "a.ts", line: 2, side: "RIGHT" }, "reworded")!;
+  expect(d.comments[1]).toEqual({ file: "a.ts", line: 2, side: "RIGHT", author: "agent", body: "reworded" });
+  expect(s.editDraftComment("pr-1", { file: "a.ts", line: 2, side: "LEFT" }, "x")).toBeNull();
+  d = s.deleteDraftComment("pr-1", { file: "a.ts", line: 1, side: "RIGHT" })!;
+  expect(d.comments.map((c) => c.body)).toEqual(["reworded"]);
+  expect(s.deleteDraftComment("pr-1", { file: "a.ts", line: 1, side: "RIGHT" })).toBeNull();
 });

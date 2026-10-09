@@ -154,12 +154,12 @@ test("agents.configure exposes tools/skill only to this plugin's own generation 
   expect(absent.skills).toEqual([]);
 
   // Same plugin origin: the floating review-agent thread gets the read tool so
-  // its chat works across the review, and the draft-comment tool, but never the
+  // its chat works across the review, and the draft-comment tools, but never the
   // guide-writing tool/skill. The guide writer never drafts comments.
   const agentThread = await h.harness.behavior.resolveAgentConfiguration(
     baseConfigContext("guided-review", "Review agent: pr-1"),
   );
-  expect(agentThread.tools.map((t) => t.name)).toEqual(["read_review_patch", "add_draft_comment"]);
+  expect(agentThread.tools.map((t) => t.name)).toEqual(["read_review_patch", "list_draft_comments", "add_draft_comment", "edit_draft_comment", "delete_draft_comment"]);
   expect(agentThread.skills).toEqual([]);
 
   // An unrelated same-plugin thread still gets nothing.

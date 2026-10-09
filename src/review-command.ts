@@ -16,11 +16,14 @@ interface Deps {
 }
 interface Ctx { projectId?: string; threadId?: string; cwd?: string }
 
+const USAGE = "usage: bb review <pr-url | pr-number | git-ref> [--base <ref>]\n       bb review comment <list | add | edit | delete> …   (see bb review comment --help)";
+
 export async function runReviewCommand(deps: Deps, argv: string[], ctx: Ctx) {
   let input: string | undefined;
   let base: string | undefined;
   for (let i = 0; i < argv.length; i++) {
     const value = argv[i];
+    if (value === "--help" || value === "-h") return { exitCode: 0, stdout: USAGE };
     if (value === "--base") {
       if (base || !argv[i + 1] || argv[i + 1].startsWith("-")) return { exitCode: 2, stderr: "--base requires a git ref." };
       base = argv[++i];
@@ -28,7 +31,7 @@ export async function runReviewCommand(deps: Deps, argv: string[], ctx: Ctx) {
       return { exitCode: 2, stderr: `Unexpected argument: ${value}` };
     } else input = value;
   }
-  if (!input) return { exitCode: 2, stderr: "usage: bb review <pr-url | pr-number | git-ref> [--base <ref>]" };
+  if (!input) return { exitCode: 2, stderr: USAGE };
   if (!ctx.projectId) return { exitCode: 2, stderr: "Run `bb review` inside a project thread." };
   const target = parseTarget(input, base);
   if (target.kind === "pr" && base) return { exitCode: 2, stderr: "--base is only supported for local git refs." };

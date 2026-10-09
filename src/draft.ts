@@ -5,7 +5,16 @@ export interface DraftComment {
   line: number;
   side: "LEFT" | "RIGHT";
   chapterId?: string;
+  /** Added by an agent, through a tool or `bb review comment`. Absent once the reviewer writes or edits it in the panel. */
+  author?: "agent";
   body: string;
+}
+
+/** A comment's place in the diff; a draft holds at most one comment per location. */
+export type CommentLocation = Pick<DraftComment, "file" | "line" | "side">;
+
+export function sameLocation(a: CommentLocation, b: CommentLocation): boolean {
+  return a.file === b.file && a.line === b.line && a.side === b.side;
 }
 
 export interface Draft {

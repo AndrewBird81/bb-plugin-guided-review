@@ -53,11 +53,22 @@ bb review my-feature --base main       # branch against main
 
 The checkout for a local review must exist on the BB server. A checkout only present on another enrolled machine is not supported by this release. Local reviews retain notes in BB and do not offer GitHub submission.
 
+Other BB threads and scripts can work with a review's draft comments. These commands change only the local draft; nothing is posted to GitHub until you submit:
+
+```sh
+bb review comment list   https://github.com/acme/web/pull/42 [--json]
+bb review comment add    https://github.com/acme/web/pull/42 src/api.ts:57 --code 'return cache.get(key);' --body 'Stale after a write?'
+bb review comment edit   https://github.com/acme/web/pull/42 src/api.ts:57 --body 'Can this return stale data after a write?'
+bb review comment delete https://github.com/acme/web/pull/42 src/api.ts:57
+```
+
+A review is named by its PR URL or its key. Line numbers count in the new file; add `--side LEFT` for a removed line, numbered in the old file. `--code` is that line's text, and `add` refuses a line that doesn't match it or already has a comment. Comments added this way show as added by an agent.
+
 ## What the review workspace includes
 
 - Ordered chapters with intent, file summaries, and risk labels. Every changed file must appear once in the generated guide.
 - Syntax-highlighted diffs, viewed-file tracking, a resizable chapter sidebar, and a collapsible chapter list on narrow screens.
-- An Ask agent tool alongside drafts and reviewer notes. The conversation is BB’s own chat: streamed answers, stop, queued messages, approvals, attachments, and a per-message model and effort picker. The assistant can add draft comments, which appear in Draft comments as it works. Pop it out as a movable, resizable widget and Dock it again.
+- An Ask agent tool alongside drafts and reviewer notes. The conversation is BB’s own chat: streamed answers, stop, queued messages, approvals, attachments, and a per-message model and effort picker. The assistant can add, edit, and delete draft comments, and the changes appear in Draft comments as it works. Pop it out as a movable, resizable widget and Dock it again.
 - CI status, existing GitHub review threads, and re-review when new commits arrive.
 - A collapsible review sidebar with icons for draft comments, private notes, and Ask agent. Click an icon to open its tool; click it again or use the close control to collapse to the icon rail. The rail includes tooltips and a draft-count badge. The selected tool and open state survive reload; editors stay mounted while collapsed. On narrow screens the rail sits above the panel below the diff.
 - Visible Approve, Comment, and Request changes buttons, followed by explicit submission and visible save or submission errors.
@@ -72,7 +83,7 @@ Guide instructions extend the bundled `guided-review-generate` skill. They apply
 
 The guide writer and the review assistant each have an **Agent** setting. **Project defaults** runs on the BB server with the provider, model, reasoning effort, and permission mode BB remembers for the review’s project. **Custom** pins all four, plus the service tier where the provider has one, with BB’s pickers, starting from the Personal project’s defaults. Custom also chooses the **Machine**: the BB server or another enrolled machine, such as your laptop. The pickers then list that machine’s providers, models, and permission limit, and the agent runs in its Personal workspace with the agent configuration installed there; within the chosen permission mode, it can reach that machine’s files and credentials. If the machine is offline or removed, starting a guide, Re-review, `bb review`, and a new assistant conversation fail at once and say why. Guide-writer changes apply to new guides and Re-review. The review assistant’s setting seeds the agent picker for a new conversation; within a conversation, change the model and effort per message as in any BB chat. A conversation keeps its provider and machine; to switch, start a **New conversation**. If BB can’t start a custom agent (for example, its provider was disabled), the assistant shows the error; failed generation records it in the plugin log.
 
-**Draft comments** contains line feedback and the **Review summary** that will go to GitHub when you submit. Select a comment’s file to jump back into the diff, or edit/remove it before sending. The assistant's comments appear here as it adds them. Its tool only adds comments: it never changes or removes one already in the draft, and never posts to GitHub. Submit refuses a draft whose comments changed since the page last showed them. **Reviewer notes** is a separate scratchpad: it is saved in BB and never included in GitHub submissions or assistant prompts. Notes survive submission and archival. If saving fails, unsaved notes have a browser recovery copy; conflicting edits can be compared with the saved version before choosing what to keep. Existing review summaries retain their original public-draft meaning.
+**Draft comments** contains line feedback and the **Review summary** that will go to GitHub when you submit. Select a comment’s file to jump back into the diff, or edit/remove it before sending. Changes from the assistant or `bb review comment` appear here as they happen. A comment an agent added is labeled **Added by agent** until you edit it. Agents can also edit and delete comments, and are told to change yours only when you ask. Nothing they do posts to GitHub. Submit refuses a draft whose comments changed since the page last showed them. **Reviewer notes** is a separate scratchpad: it is saved in BB and never included in GitHub submissions or assistant prompts. Notes survive submission and archival. If saving fails, unsaved notes have a browser recovery copy; conflicting edits can be compared with the saved version before choosing what to keep. Existing review summaries retain their original public-draft meaning.
 
 ## Data and access
 
