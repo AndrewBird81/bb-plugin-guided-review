@@ -15,6 +15,10 @@ function stateFor(bb: BbPluginApi, targetKey: string) {
   return { reviews, state };
 }
 
+export function isReviewAgentTurnActive(bb: BbPluginApi, targetKey: string) {
+  return work.get(bb)?.get(targetKey)?.turn === true;
+}
+
 /** Reserve the turn before waiting, so another question cannot queue behind it. */
 export async function withReviewAgentTurn<T>(bb: BbPluginApi, targetKey: string, run: () => Promise<T>): Promise<T> {
   const { reviews, state } = stateFor(bb, targetKey);

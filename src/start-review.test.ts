@@ -60,6 +60,20 @@ test("createPrReview stores the review + patch and returns ok with a targetKey",
   expect(store.readPatch(key).text).toContain("diff --git a/a.ts");
 });
 
+test("starting an archived PR's review again returns it to the queue", async () => {
+  const { bb } = createFakePluginHost({
+    pluginId: "guided-review",
+    sdk: { threads: { spawn: async () => ({ id: "th_1" }), wait: async () => {}, archive: async () => {}, stop: async () => {} } },
+  });
+  const store = createStore(bb);
+  await createPrReview({ bb, store, gh }, { input: "https://github.com/acme/web/pull/7", projectId: "p1" });
+  store.setLifecycle(key, { userArchivedAt: 1 });
+
+  await createPrReview({ bb, store, gh }, { input: "https://github.com/acme/web/pull/7", projectId: "p1" });
+
+  expect(store.getReview(key)?.userArchivedAt).toBeNull();
+});
+
 test("createPrReview rejects a non-PR-URL input", async () => {
   const { bb } = createFakePluginHost({ pluginId: "guided-review" });
   const store = createStore(bb);

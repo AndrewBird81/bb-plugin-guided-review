@@ -84,6 +84,13 @@ export const rpcContract = defineRpcContract({
     output: z.object({ ok: z.boolean(), error: z.string().optional() }),
   },
 
+  // Reviewer-managed archive, and permanent deletion of a review's saved data
+  archiveReview: {
+    input: z.object({ targetKey: z.string(), archived: z.boolean() }).strict(),
+    output: z.object({ ok: z.boolean(), error: z.string().optional() }),
+  },
+  deleteReview: { input: targetKey, output: z.object({ ok: z.boolean(), error: z.string().optional() }) },
+
   // Task 11: draft + submit
   getDraft: { input: targetKey, output: z.object({ draft: z.any() }) },
   saveDraftComment: {

@@ -61,6 +61,38 @@ test("agent messages append and list oldest-first with context", () => {
   expect(msgs[1].context).toBeNull();
 });
 
+test("deleteReview clears every per-review table and leaves other reviews intact", () => {
+  const { bb } = createFakePluginHost({ pluginId: "guided-review" });
+  const s = createStore(bb);
+  for (const key of ["pr-1", "pr-2"]) {
+    s.saveReview({ targetKey: key, kind: "pr", number: 1, status: "ready", createdAt: 1 });
+    s.savePatch(key, "diff --git a/a.ts b/a.ts\n");
+    s.beginGeneration(key);
+    s.saveGuide(key, { title: "T", intent: "I", sections: [], unplacedFiles: [] });
+    s.upsertDraftComment(key, { file: "a.ts", line: 1, side: "RIGHT", body: "x" });
+    s.setFileViewed(key, "a.ts", "hash");
+    s.setAgentThread(key, `th-${key}`);
+    s.appendAgentMessage(key, "user", "question");
+    s.setLifecycle(key, { userArchivedAt: 1 });
+    s.saveReviewerNotes(key, "private", 0);
+  }
+  s.deleteReview("pr-1");
+
+  // Every table keyed by review, including ones added after this test.
+  const db = bb.storage.database();
+  const tables = (db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as { name: string }[])
+    .map((t) => t.name)
+    .filter((name) => (db.prepare(`PRAGMA table_info(${name})`).all() as { name: string }[]).some((c) => c.name === "target_key"));
+  expect(tables.length).toBeGreaterThan(0);
+  const count = (table: string, key: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE target_key=?`).get(key) as { n: number }).n;
+  for (const table of tables) {
+    expect({ table, rows: count(table, "pr-2") }).not.toEqual({ table, rows: 0 });
+    expect({ table, rows: count(table, "pr-1") }).toEqual({ table, rows: 0 });
+  }
+  expect(s.getReview("pr-1")).toBeNull();
+  expect(s.getReview("pr-2")).toMatchObject({ userArchivedAt: 1 });
+});
+
 test("draft comments upsert and delete", () => {
   const s = store();
   s.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, status: "ready", createdAt: 1 });

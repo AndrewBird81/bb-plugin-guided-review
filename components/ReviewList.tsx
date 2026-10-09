@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useRpc, useBbNavigate, useRealtime } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../src/rpc-contract";
 import { reviewState, type ReviewItem } from "../lib/review-state";
@@ -9,6 +9,7 @@ import { Icon } from "./ui/icon";
 import { Skeleton } from "./ui/skeleton";
 import { SetupReadiness } from "./ReleaseSettings";
 import { AccountBar } from "./AccountBar";
+import { ReviewActions } from "./ReviewActions";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 
 /** Compact "2h ago" relative time. Returns null for absent/implausible stamps. */
@@ -33,13 +34,15 @@ function isPrReview(r: ReviewItem): boolean {
   return r.kind === "pr" || r.number != null;
 }
 
-function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: () => void }) {
+function ReviewRow({ review, onOpen, onChanged }: { review: ReviewItem; onOpen: () => void; onChanged: () => void }) {
   const state = reviewState(review);
+  const titleId = useId();
   return (
-    <button type="button" onClick={onOpen} className="group flex w-full min-w-0 items-center gap-3 border-b border-border px-2 py-4 text-left last:border-b-0 hover:bg-state-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:gap-4 sm:px-3">
+    <div className="group flex min-w-0 items-center border-b border-border pr-1 last:border-b-0 hover:bg-state-hover sm:pr-2">
+    <button type="button" onClick={onOpen} className="flex min-w-0 flex-1 items-center gap-3 px-2 py-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:gap-4 sm:px-3">
       <Icon name={review.prState === "MERGED" ? "GitMerge" : isPrReview(review) ? "GitPullRequest" : "GitBranch"} className="size-4 shrink-0 text-muted-foreground" aria-hidden />
       <span className="min-w-0 flex-1 space-y-1">
-        <span className="block text-sm font-medium leading-snug text-foreground">{review.title ?? review.gitRef ?? review.targetKey}</span>
+        <span id={titleId} className="block text-sm font-medium leading-snug text-foreground">{review.title ?? review.gitRef ?? review.targetKey}</span>
         <span className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <span className="break-all">{review.repo ?? review.gitRef}{review.number ? ` #${review.number}` : ""}</span>
           {review.author && <span>@{review.author}</span>}
@@ -55,6 +58,8 @@ function ReviewRow({ review, onOpen }: { review: ReviewItem; onOpen: () => void 
         <span className="hidden items-center gap-1 text-xs text-muted-foreground group-hover:text-foreground sm:inline-flex">{state.action}<Icon name="ChevronRight" className="size-3.5" aria-hidden /></span>
       </span>
     </button>
+    <ReviewActions review={review} onChanged={onChanged} onDeleted={onChanged} describedBy={titleId} />
+    </div>
   );
 }
 
@@ -77,9 +82,10 @@ export const ReviewList = memo(function ReviewList() {
     catch { setSyncError(true); }
     finally { setRefreshing(false); }
   }, [rpc]);
-  useRealtime("reviews", () => {
+  const relist = useCallback(() => {
     void rpc.call("listReviews", null).then((result) => setReviews(result.reviews)).catch(() => {});
-  });
+  }, [rpc]);
+  useRealtime("reviews", relist);
   useRealtime("gh-account", () => { void refresh(); });
   useEffect(() => {
     const onFocus = () => { void refresh(); };
@@ -227,8 +233,8 @@ export const ReviewList = memo(function ReviewList() {
         {syncError && <p role="alert" className="py-3 text-sm text-destructive">Couldn’t refresh GitHub status. Saved reviews are still available; try Refresh again.</p>}
         {loading ? <div role="status" aria-busy="true" className="space-y-4 py-4"><span className="sr-only">Loading reviews…</span>{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
           : loadError ? <div role="alert" className="py-8"><h2 className="font-medium">Couldn’t load your reviews</h2><p className="mt-2 text-sm text-muted-foreground">Your saved reviews haven’t been removed. Check the connection and try again.</p><Button variant="outline" className="mt-4" onClick={() => setReload((n) => n + 1)}>Try again</Button></div>
-          : visible.length === 0 ? <div className="py-12 text-center"><h2 className="text-sm font-medium">{filter === "archive" ? "No archived reviews" : filter === "reviewed" ? "No submitted reviews yet" : sorted.length ? "You’re all caught up" : "No reviews yet"}</h2><p className="mt-2 text-sm text-muted-foreground">{filter === "archive" ? "Merged and closed pull requests move here automatically." : filter === "reviewed" ? "Your submitted verdicts appear here, ready to revisit." : "Paste a pull request URL above to start a review."}</p></div>
-          : <div>{visible.map((review) => <ReviewRow key={review.targetKey} review={review} onOpen={() => open(review.targetKey)} />)}</div>}
+          : visible.length === 0 ? <div className="py-12 text-center"><h2 className="text-sm font-medium">{filter === "archive" ? "No archived reviews" : filter === "reviewed" ? "No submitted reviews yet" : sorted.length ? "You’re all caught up" : "No reviews yet"}</h2><p className="mt-2 text-sm text-muted-foreground">{filter === "archive" ? "Merged and closed pull requests move here automatically, along with reviews you archive." : filter === "reviewed" ? "Your submitted verdicts appear here, ready to revisit." : "Paste a pull request URL above to start a review."}</p></div>
+          : <div>{visible.map((review) => <ReviewRow key={review.targetKey} review={review} onOpen={() => open(review.targetKey)} onChanged={relist} />)}</div>}
       </section>
     </div>
   );

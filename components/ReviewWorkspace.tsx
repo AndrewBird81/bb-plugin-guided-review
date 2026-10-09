@@ -17,6 +17,7 @@ import { RereviewBanner } from "./RereviewBanner";
 import { ThreadsPanel } from "./ThreadsPanel";
 import type { DockInjection } from "./AgentDock";
 import { ReviewSkeleton, ReviewError } from "./ReviewSkeleton";
+import { ReviewActions } from "./ReviewActions";
 import { defaultPreferences } from "../lib/review-preferences";
 
 const SIDEBAR_MIN = 200;
@@ -94,6 +95,8 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         rpc.call("getChecks", { targetKey }).catch(() => null),
       ]);
       if (id !== request.current) return;
+      // A deleted review shows "Review not found" rather than a pending regeneration.
+      if (!review) hasDisplayedGuide.current = false;
       if (!guide && hasDisplayedGuide.current) {
         setGeneratingReplacement(true);
         if (review?.status === "error") setLoadError("Couldn’t regenerate the guide. Your previous view and unsaved edits are still here.");
@@ -356,7 +359,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
       style={{ backgroundColor: "rgb(from var(--background) r g b / 1)" }}
     >
       {loadError && <div role="alert" className="flex flex-wrap items-center gap-3 border-b border-border p-3 text-sm text-destructive"><span>{loadError}</span><Button variant="outline" size="sm" onClick={() => void load()}>Try again</Button></div>}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1"><Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel("review")}><Icon name="ArrowRight" className="size-4 rotate-180" aria-hidden /> All reviews</Button><div className="ml-auto flex flex-wrap gap-1"><Button variant="ghost" size="sm" aria-label="Ask the review agent" onClick={() => setInjection({ context: { file: currentFile, chapterId: activeId }, nonce: Date.now() })}><Icon name="AiContentGenerator01" className="size-4" aria-hidden /> Ask assistant</Button><Button variant="ghost" size="sm" onClick={async () => { if (document.fullscreenElement) await document.exitFullscreen(); navigate.toPluginPanel("review", { subPath: `settings/${targetKey}` }); }}><Icon name="Settings" className="size-4" aria-hidden /> Settings</Button></div></div>
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1"><Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel("review")}><Icon name="ArrowRight" className="size-4 rotate-180" aria-hidden /> All reviews</Button><div className="ml-auto flex flex-wrap gap-1"><Button variant="ghost" size="sm" aria-label="Ask the review agent" onClick={() => setInjection({ context: { file: currentFile, chapterId: activeId }, nonce: Date.now() })}><Icon name="AiContentGenerator01" className="size-4" aria-hidden /> Ask assistant</Button><Button variant="ghost" size="sm" onClick={async () => { if (document.fullscreenElement) await document.exitFullscreen(); navigate.toPluginPanel("review", { subPath: `settings/${targetKey}` }); }}><Icon name="Settings" className="size-4" aria-hidden /> Settings</Button><ReviewActions review={review} className="size-8" onChanged={() => void load()} onDeleted={() => { if (document.fullscreenElement) void document.exitFullscreen().catch(() => {}); navigate.toPluginPanel("review"); }} /></div></div>
       {/* Header — full when reviewing normally, slim in focus mode. */}
       {focus ? (
         <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">

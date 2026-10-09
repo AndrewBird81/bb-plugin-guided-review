@@ -29,6 +29,13 @@ test("sync restores the viewer's approval, ignoring someone else's later review"
   expect(store.getReview("pr-1")).toMatchObject({ submittedVerdict: "APPROVE", reviewer: "me", submittedHeadSha: "sha1" });
 });
 
+test("sync keeps a reviewer's archive on an open PR", async () => {
+  const { sync, store } = setup("OPEN");
+  store.setLifecycle("pr-1", { userArchivedAt: 5 });
+  await sync.all();
+  expect(store.getReview("pr-1")).toMatchObject({ prState: "OPEN", archivedAt: null, userArchivedAt: 5 });
+});
+
 test("failed refresh preserves approval and does not archive a PR", async () => {
   const { sync, store, run } = setup();
   store.setLifecycle("pr-1", { submittedVerdict: "APPROVE", submittedAt: 1 });

@@ -12,6 +12,8 @@ import { validateGuide, checkCoverage } from "./src/guide";
 import { runReviewCommand } from "./src/review-command";
 import { createPrReview } from "./src/start-review";
 import { runAgentTurn, stopReviewAgents, hasReviewAgents } from "./src/agent";
+import { isReviewAgentTurnActive } from "./src/agent-coordination";
+import { isMissingThread } from "./src/thread-errors";
 import { computeFileViewState, hashForFile } from "./src/file-views";
 import {
   ghPrViewArgs,
@@ -190,6 +192,32 @@ export default async function plugin(bb: BbPluginApi) {
       await sync.one(targetKey, true);
       if (store.getReview(targetKey)?.archivedAt) return { ok: false, error: "This PR is archived. Its guide and conversation are still available." };
       return rerunReview({ bb, store, gh: { runGh, runGit } }, targetKey);
+    },
+    archiveReview({ targetKey, archived }) {
+      if (!store.getReview(targetKey)) return { ok: false, error: "This review no longer exists." };
+      store.setLifecycle(targetKey, { userArchivedAt: archived ? Date.now() : null });
+      bb.realtime.publish(`review:${targetKey}`, { ts: Date.now() });
+      bb.realtime.publish("reviews", { ts: Date.now() });
+      return { ok: true };
+    },
+    async deleteReview({ targetKey }) {
+      const review = store.getReview(targetKey);
+      if (!review) return { ok: true };
+      // A guide worker can't be cancelled per review, and an answer in progress could re-attach its worker.
+      if (review.status === "generating") return { ok: false, error: "Wait for the guide to finish generating, then delete the review." };
+      if (isReviewAgentTurnActive(bb, targetKey)) return { ok: false, error: "Wait for the assistant to finish answering, then delete the review." };
+      const threadId = store.getAgentThread(targetKey);
+      store.deleteReview(targetKey);
+      bb.realtime.publish(`review:${targetKey}`, { ts: Date.now() });
+      bb.realtime.publish("reviews", { ts: Date.now() });
+      await notifications.forget(targetKey).catch(() => {});
+      if (threadId) {
+        await bb.sdk.threads.stop({ threadId }).catch(() => {});
+        await bb.sdk.threads.delete({ threadId, childThreadsConfirmed: false }).catch((error) => {
+          if (!isMissingThread(error)) bb.log.warn(`Could not delete review thread ${threadId}: ${String(error)}`);
+        });
+      }
+      return { ok: true };
     },
 
     // Task 11: draft + submit

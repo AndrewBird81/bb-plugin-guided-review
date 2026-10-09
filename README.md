@@ -100,6 +100,8 @@ Inspired by [plannotator/guides](https://github.com/plannotator/guides). The vie
 
 Review-agent conversations stay in Guided Review. Existing mapped worker threads are hidden on startup, and idle runtimes are released after each answer. If a worker has been archived or deleted, the next question starts a fresh hidden worker with the prior conversation as context. Archived PRs can still be discussed: cleanup waits for the answer before archiving that temporary worker. Approved, commented, and changes-requested reviews appear under Reviewed. A new commit returns a submitted review to Needs review while retaining its earlier verdict. Merged and closed PRs move to Archive automatically; their guides, conversations, and unsent drafts remain accessible. GitHub is checked every minute and through Refresh. A failed GitHub read preserves saved state.
 
+To set aside any other review, choose **Archive** from its **Review actions** menu (⋯) in the list or the review’s top bar. It stays in Archive, even when new commits arrive, until you choose **Unarchive** or start it again with a PR link, `bb review`, or Re-review. **Delete** permanently removes the review’s guide, drafts, reviewer notes, and assistant conversation, including its hidden worker thread, after confirmation; nothing changes on GitHub. Delete is unavailable while a guide is generating or the assistant is answering.
+
 ## Browser regression test
 
 Use Node 24, matching the installed SQLite native module. Build and reload this plugin in an isolated test BB, then run:

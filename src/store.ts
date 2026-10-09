@@ -7,6 +7,8 @@ import { defaultPreferences, preferencesSchema, type PreferencesRecord, type Rev
 export interface ReviewLifecycle {
   prState?: "OPEN" | "CLOSED" | "MERGED";
   archivedAt?: number | null;
+  /** Archived by the reviewer. GitHub sync owns archivedAt and never changes this. */
+  userArchivedAt?: number | null;
   submittedVerdict?: Verdict | null;
   submittedAt?: number | null;
   submittedHeadSha?: string | null;
@@ -66,6 +68,8 @@ export interface Store {
   listReviews(): ReviewMeta[];
   setStatus(targetKey: string, status: ReviewMeta["status"]): void;
   setLifecycle(targetKey: string, state: ReviewLifecycle): void;
+  /** Remove the review and everything stored for it. */
+  deleteReview(targetKey: string): void;
   savePatch(targetKey: string, patch: string): void;
   readPatch(targetKey: string, offset?: number, limit?: number): { text: string; total: number };
   saveGuide(targetKey: string, guide: Guide): void;
@@ -190,6 +194,11 @@ export function createStore(bb: BbPluginApi): Store {
       db.prepare(`INSERT INTO review_lifecycle VALUES (?,?) ON CONFLICT(target_key) DO UPDATE SET state=excluded.state`)
         .run(k, JSON.stringify({ ...previous, ...state }));
     },
+    deleteReview(k) {
+      db.transaction(() => {
+        for (const table of REVIEW_TABLES) db.prepare(`DELETE FROM ${table} WHERE target_key=?`).run(k);
+      })();
+    },
     savePatch(k, patch) {
       db.prepare(
         `INSERT INTO patches (target_key,patch) VALUES (?,?)
@@ -217,6 +226,8 @@ export function createStore(bb: BbPluginApi): Store {
         db.prepare(`INSERT INTO generations VALUES (?,?) ON CONFLICT(target_key) DO UPDATE SET generation_id=excluded.generation_id`).run(k, id);
         db.prepare(`DELETE FROM guides WHERE target_key=?`).run(k);
         db.prepare(`UPDATE reviews SET status='generating' WHERE target_key=?`).run(k);
+        // Restarting a review (new PR link, `bb review`, Re-review) takes it out of the reviewer's archive.
+        if (this.getReview(k)?.userArchivedAt) this.setLifecycle(k, { userArchivedAt: null });
       })();
       return id;
     },
@@ -325,6 +336,12 @@ export function createStore(bb: BbPluginApi): Store {
     },
   };
 }
+
+// Every table keyed by target_key. A new per-review table belongs here too.
+const REVIEW_TABLES = [
+  "reviews", "patches", "guides", "drafts", "file_views", "agent_threads", "agent_messages",
+  "generations", "draft_comment_revisions", "review_lifecycle", "reviewer_notes",
+] as const;
 
 function patchHash(patch: string) { return createHash("sha256").update(patch).digest("hex"); }
 

@@ -86,6 +86,13 @@ function createNotifications(bb: BbPluginApi, store: Store) {
   }
   return {
     flush,
+    /** Drop a deleted review's queued outcome and ordering clock. */
+    forget(targetKey: string): Promise<void> {
+      return locked(async () => {
+        await bb.storage.kv.delete(`${PREFIX}${targetKey}`);
+        await bb.storage.kv.delete(`needs-you:clock:${targetKey}`);
+      });
+    },
     async queue(record: Omit<Pending, "occurredAt">) {
       if (disposed || !store.isCurrentGeneration(record.targetKey, record.generationId)) return;
       await locked(async () => {

@@ -46,7 +46,7 @@ Interface text inherits the BB sans family; file paths, line references, and CLI
 
 ## Layout
 
-The list fills the available panel width with 16px padding, increasing to 24px at the small breakpoint. Account context precedes the PR form and first-run disclosure. Saved reviews use full-width rows with aligned titles, repository metadata, state, and one next action. Needs review, Reviewed, and Archive filters separate unfinished work, submitted verdicts, and merged or closed PRs. There is no duplicate resume card. The input and primary action stack on narrow screens.
+The list fills the available panel width with 16px padding, increasing to 24px at the small breakpoint. Account context precedes the PR form and first-run disclosure. Saved reviews use full-width rows with aligned titles, repository metadata, state, one next action, and a trailing Review actions menu (Archive or Unarchive, Delete). Needs review, Reviewed, and Archive filters separate unfinished work, submitted verdicts, and merged, closed, or reviewer-archived reviews. There is no duplicate resume card. The input and primary action stack on narrow screens.
 
 The workspace fills the panel’s height and width. Desktop chapters occupy a resizable sidebar, initially 288px and constrained to 200–560px, beside the flexible diff/thread pane. The separator supports pointer dragging and keyboard adjustment. Focus mode reduces header detail; fullscreen expands the workspace.
 
@@ -76,7 +76,7 @@ Controls and diff frames use the host medium radius; review rows and the start f
 
 ## Review lifecycle
 
-Generation and the submitted verdict are stored separately. Successful submissions survive refresh and regeneration. A supervised service checks GitHub once per minute; Refresh and returning focus to the list also reconcile state. Only the authenticated viewer’s review supplies their verdict. New commits retain the earlier verdict while returning the item to Needs review. Terminal PRs appear in Archive and offer View review. Fullscreen selects, popovers, dialogs, and drawers portal into the fullscreen subtree.
+Generation and the submitted verdict are stored separately. Successful submissions survive refresh and regeneration. A supervised service checks GitHub once per minute; Refresh and returning focus to the list also reconcile state. Only the authenticated viewer’s review supplies their verdict. New commits retain the earlier verdict while returning the item to Needs review. Terminal PRs appear in Archive and offer View review. A reviewer-archived review stays in Archive through new commits until Unarchive or a restart (new PR link, `bb review`, Re-review). Delete is permanent and confirmed in a dialog. Fullscreen selects, popovers, dialogs, and drawers portal into the fullscreen subtree.
 
 ## Review customization
 
