@@ -1,5 +1,5 @@
 import { splitPatchByFile } from "./patch";
-import { hashFileDiff } from "./diff-hash";
+import { hashFileDiff, normalizedFileHash } from "./diff-hash";
 import type { FileView } from "./store";
 
 export interface FileViewState {
@@ -13,7 +13,7 @@ export interface FileViewState {
 /** Current content hash of every changed file in the patch, keyed by path. */
 export function currentFileHashes(patch: string): Map<string, string> {
   const m = new Map<string, string>();
-  for (const f of splitPatchByFile(patch)) if (f.path) m.set(f.path, hashFileDiff(f.text));
+  for (const f of splitPatchByFile(patch)) if (f.path) m.set(f.path, normalizedFileHash(f.text));
   return m;
 }
 
@@ -24,9 +24,14 @@ export function hashForFile(patch: string, file: string): string | null {
 
 /** Resolve stored view rows against the current patch into viewed/stale flags. */
 export function computeFileViewState(stored: FileView[], patch: string): FileViewState[] {
-  const current = currentFileHashes(patch);
+  // Marks saved before the rebase-proof hash stored the whole-diff hash; accept either.
+  const current = new Map<string, string[]>();
+  for (const f of splitPatchByFile(patch)) {
+    if (f.path) current.set(f.path, [normalizedFileHash(f.text), hashFileDiff(f.text)]);
+  }
   return stored.map((v) => {
     const cur = current.get(v.file);
-    return { file: v.file, viewed: cur != null && cur === v.hash, stale: cur != null && cur !== v.hash };
+    const matches = cur != null && cur.includes(v.hash);
+    return { file: v.file, viewed: matches, stale: cur != null && !matches };
   });
 }
