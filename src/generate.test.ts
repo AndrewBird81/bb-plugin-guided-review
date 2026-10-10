@@ -170,3 +170,30 @@ test("agents.configure exposes tools/skill only to this plugin's own generation 
   expect(other.tools).toEqual([]);
   expect(other.skills).toEqual([]);
 });
+
+test("a rebuilt guide for a PR you reviewed checks your feedback instead of reviewing from scratch", async () => {
+  const { generateGuide, buildGenerationPrompt } = await import("./generate");
+  const { defaultPreferences } = await import("./preferences");
+  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: {
+    spawn: async () => ({ id: "worker" }), archive: async () => {}, stop: async () => {},
+    get: async () => ({ archivedAt: null, deletedAt: null, status: "idle" }), send: async () => ({}),
+  } } as any });
+  const store = createStore(bb);
+  store.saveReview({ targetKey: "pr-1", kind: "pr", repo: "acme/web", number: 1, headSha: "sha2", status: "ready", createdAt: 1, projectId: "p1" });
+  store.setLifecycle("pr-1", { submittedVerdict: "REQUEST_CHANGES", submittedAt: 1000, submittedHeadSha: "sha1", signals: { lastReviewAt: 1000, lastReviewSha: "sha1" } });
+  store.saveGuide("pr-1", { title: "T", intent: "I", sections: [{ id: "cache", title: "Cache", overview: "o", diffs: [{ file: "a.ts", summary: "s" }] }], unplacedFiles: [] });
+  store.setAssistantThread("pr-1", "assistant");
+  harness.inspection.sdk.stub("threads.wait", async () => { store.saveGuide("pr-1", { title: "T", intent: "I", sections: [], unplacedFiles: [] }); return { matched: true }; });
+  await generateGuide(bb, store, "pr-1", "p1", { notify: false });
+  // The guide writer kept the earlier chapters in view and was asked for sinceReview.
+  const prompt = harness.inspection.sdk.callsTo("threads.spawn")[0][0].prompt as string;
+  expect(prompt).toContain("- cache: Cache (a.ts)");
+  expect(prompt).toContain("sinceReview");
+  // The review's conversation got the feedback check, with its context only the assistant sees.
+  const sent = harness.inspection.sdk.callsTo("threads.send")[0][0] as any;
+  expect(sent.input[0].text).toBe(defaultPreferences.verificationPrompt);
+  expect(sent.input[1]).toMatchObject({ visibility: "agent-only", text: expect.stringContaining("REQUEST_CHANGES on commit sha1") });
+  expect(store.getReview("pr-1")?.verifyingSince).toEqual(expect.any(Number));
+  // A first review gets neither.
+  expect(buildGenerationPrompt("pr-2", "g", defaultPreferences)).not.toContain("sinceReview");
+});
