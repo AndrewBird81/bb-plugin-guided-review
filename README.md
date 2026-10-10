@@ -74,15 +74,40 @@ A review is named by its PR URL or its key. Line numbers count in the new file; 
 - Draft comments in the diff, under their lines, as on GitHub. Click **+** beside a line, or select lines and choose **Add comment**, to write one there; edit or remove it in place. File headers count their draft comments.
 - Discussions with the assistant under a line, kept apart from its comment. **Ask agent** on a comment opens a box under it: say what's wrong or ask why, and the assistant answers there, or edits or removes the comment. **Ask agent** in the comment box, or on selected lines, asks about the lines without adding a comment. Discussions stay in BB: submitting sends only the comments, and clears the discussions.
 - An Ask agent tool alongside drafts and reviewer notes. The conversation is BB’s own chat: streamed answers, stop, queued messages, approvals, attachments, and a per-message model and effort picker. The assistant can add, edit, and delete draft comments, and the changes appear in Draft comments as it works. Pop it out as a movable, resizable widget and Dock it again.
-- CI status, existing GitHub review threads, and re-review when new commits arrive.
+- CI status, existing GitHub review threads, and a **Feedback** view that checks each piece of your earlier feedback when a PR comes back to you (see [Whose turn](#whose-turn)).
 - A collapsible review sidebar with icons for draft comments, private notes, and Ask agent. Click an icon to open its tool; click it again or use the close control to collapse to the icon rail. The rail includes tooltips and a draft-count badge. The selected tool and open state survive reload; editors stay mounted while collapsed. On narrow screens the rail sits above the panel below the diff.
 - Visible Approve, Comment, and Request changes buttons, followed by explicit submission and visible save or submission errors.
 
-A review is pinned to the PR snapshot it was generated from. If the PR changes, re-review before submitting. Remove affected inline comments from an older patch, then add any replacements against the current patch. Submission failures retain the draft; repeated clicks cannot submit the same draft concurrently. Unsaved summaries and comments keep a recovery copy in this browser tab, bound to their original review revision. Re-review retains the previous view while its replacement is generated.
+A review is pinned to the PR snapshot it was generated from. If the PR changes, re-review before submitting. Unsent draft comments follow their lines into the new diff; a comment whose line is gone is marked **Older diff**: remove it, then add any replacement against the current patch. Submission failures retain the draft; repeated clicks cannot submit the same draft concurrently. Unsaved summaries and comments keep a recovery copy in this browser tab, bound to their original review revision. Re-review retains the previous view while its replacement is generated.
+
+## Whose turn
+
+The review list has four tabs:
+
+- **Needs review**: it's your turn. New reviews, requests for your review, and reviews that came back to you, longest-waiting first. Team requests sit under their own heading. **Blocks merge** marks a changes-requested review that's the only thing left: everyone else approved.
+- **Waiting on author**: you requested changes, or commented with open threads, and the author hasn't said they're done. Rows show progress (`2/5 addressed`), new commits, and CI.
+- **Reviewed**: you approved, or commented with nothing open. A push after your approval adds “updated” but doesn't bring it back.
+- **Archive**: merged, closed, or archived by you.
+
+A push alone never makes a review your turn: authors often push one fix at a time. A review comes back to **Needs review** when:
+
+- the author **re-requests** your review (it even leaves your archive);
+- the author **asks you something** on one of your threads, or mentions you on the PR (choose **Any reply** in settings to come back on every reply);
+- every thread you opened is **resolved or answered**, there are new commits, CI isn't running or failing, and the author has been quiet for 10 minutes;
+- with **After the author pushes → Check, and bring it back** on, the review assistant finds all your feedback addressed;
+- GitHub dismisses your review.
+
+Your verdict is your latest approve or changes-requested review, as GitHub counts it: replying to a thread doesn't change it. If a review came back too early, choose **Not yet** in its **Review actions** menu or top bar. It waits on the author until a newer reason; pushes alone don't wake it.
+
+**When a review comes back, it's prepared for you.** An out-of-date guide is rebuilt for the new commits, keeping its chapters where the files still fit and summarizing what changed since your review. Then the review assistant checks your feedback, in the review's own conversation: for each of your threads, and each ask in your review summary, it records whether the author **addressed** it, partly, not at all, or disagreed, with one line of evidence. It also looks for new problems in the fix commits, drafts replies to your threads, and suggests a verdict. The **Feedback** view shows all of it: your comment, the author's replies, the assistant's evidence, and **Resolve**, **Reply** (prefilled with the drafted reply), **Follow up** (a new draft comment at the line), and **Show in diff**. **Use as draft** puts the suggested verdict and summary in your draft; **Request what's left** drafts a Request changes listing what's still open. Nothing posts to GitHub until you choose Send, Resolve, or Submit. Change the check's instructions, or turn it off, with **Re-review check** in settings.
+
+**Since your review** in the diff toolbar shows only what changed since the commit you last reviewed, with new lines marked. It compares the PR's diff then with its diff now, so rebases and merges from the base branch don't show up as changes. Viewed marks survive a rebase, and chapters show how many of their files changed.
+
+With **Track reviews from GitHub** on (the default), PRs you're asked to review, and open PRs you've reviewed in the last 60 days, join the list without a guide; start one from the review or its menu. List patterns under **Start guides automatically** (`acme/*`, `acme/api`, or `*`) to have the guide ready by the time a request alerts you. A PR you delete isn't added back. Reading GitHub costs about 4 GraphQL points per 10 PRs a pass, out of the 5,000 an hour your account has.
 
 ## Customize your reviews
 
-Open **Settings** from the review list or workspace, or use Guided Review’s section in BB’s plugin settings. Choose Concise, Standard, or Detailed guides, add guide-writing instructions, customize the review assistant’s priorities, and select a default diff layout. Save settings to apply them across this installation. Restore defaults stages a change for you to save; it does not change settings immediately.
+Open **Settings** from the review list or workspace, or use Guided Review’s section in BB’s plugin settings. Choose Concise, Standard, or Detailed guides, add guide-writing instructions, customize the review assistant’s priorities, set how reviews come back to you under **Whose turn**, and select a default diff layout. Save settings to apply them across this installation. Restore defaults stages a change for you to save; it does not change settings immediately.
 
 Guide instructions extend the bundled `guided-review-generate` skill. They apply to new guides and Re-review; the output schema and complete file coverage remain validated. Assistant instructions reach the assistant as hidden instructions; an idle conversation picks up changes on its next message. **Automatic review** is the assistant's first message when a guide is ready and the review has no conversation yet. By default it asks for an adversarial review with terse inline comments and general points in the reply. Leave it blank to turn the automatic review off.
 
@@ -116,9 +141,9 @@ Inspired by [plannotator/guides](https://github.com/plannotator/guides). The vie
 
 ## Review state and archive
 
-Each review’s assistant conversation is a hidden BB thread, shown in the review with BB’s chat. Review context (guide intent, chapters, and your assistant instructions) reaches it as hidden instructions, refreshed when an idle conversation continues after Re-review or an instructions change. Selections and the Ask assistant button quote the file or lines into your message. **New conversation** archives the current one; if a conversation’s thread is archived or deleted, the next question starts a new one. Archived PRs can still be discussed: their conversations stay unarchived because BB cannot send to an archived thread. A conversation from an earlier plugin version stays visible above the chat and reaches the first new message as context. Approved, commented, and changes-requested reviews appear under Reviewed. A new commit returns a submitted review to Needs review while retaining its earlier verdict. Merged and closed PRs move to Archive automatically; their guides, conversations, and unsent drafts remain accessible. GitHub is checked every minute and through Refresh. A failed GitHub read preserves saved state.
+Each review’s assistant conversation is a hidden BB thread, shown in the review with BB’s chat. Review context (guide intent, chapters, and your assistant instructions) reaches it as hidden instructions, refreshed when an idle conversation continues after Re-review or an instructions change. Selections and the Ask assistant button quote the file or lines into your message. **New conversation** archives the current one; if a conversation’s thread is archived or deleted, the next question starts a new one. Archived PRs can still be discussed: their conversations stay unarchived because BB cannot send to an archived thread. A conversation from an earlier plugin version stays visible above the chat and reaches the first new message as context. Where a submitted review appears depends on whose turn it is; see [Whose turn](#whose-turn). Merged and closed PRs move to Archive automatically; their guides, conversations, and unsent drafts remain accessible. GitHub is checked every one to two minutes for reviews in progress, sooner when GitHub notifies you about a PR, and through Refresh. A failed GitHub read preserves saved state.
 
-To set aside any other review, choose **Archive** from its **Review actions** menu (⋯) in the list or the review’s top bar. It stays in Archive, even when new commits arrive, until you choose **Unarchive** or start it again with a PR link, `bb review`, or Re-review. **Delete** permanently removes the review’s guide, drafts, reviewer notes, and assistant conversation, including its hidden worker thread, after confirmation; nothing changes on GitHub. Delete is unavailable while a guide is generating or the assistant is answering.
+To set aside any other review, choose **Archive** from its **Review actions** menu (⋯) in the list or the review’s top bar. It stays in Archive, even when new commits arrive, until you choose **Unarchive**, start it again with a PR link, `bb review`, or Re-review, or the author re-requests your review. **Delete** permanently removes the review’s guide, drafts, reviewer notes, and assistant conversation, including its hidden worker thread, after confirmation; nothing changes on GitHub. Delete is unavailable while a guide is generating or the assistant is answering. A deleted PR isn't added back from GitHub until you start it again.
 
 ## Browser regression test
 
@@ -135,12 +160,17 @@ BB_E2E_URL=http://127.0.0.1:4331 npm test -- --project e2e
 The browser uses the running BB shell and built plugin UI. Guided Review RPC requests are intercepted into the official SDK test host with real temporary SQLite. GitHub and agent calls are stubbed at their external boundaries, so no real PR review or agent thread is created. The flow covers settings persistence, draft-comment editing, public summaries, private-note isolation, fullscreen verdict buttons, submission, reload, starting an assistant conversation with file context, sidebar collapse/persistence, keyboard tooltips, panel/widget draft preservation, merge archival, and desktop/390px mobile layouts. Without `BB_E2E_URL`, this test is skipped.
 
 
-## Guide-ready notifications
+## Notifications
 
 With **Needs You 0.2.0-beta.3+** installed, a finished guide appears in your Needs
 You inbox with an **Open review** action. Failed generation has its own recovery
-message. Re-review updates the same item; hidden worker threads do not create
-extra alerts. Enable **Needs You → Settings → Extension activity** to receive
+message. A review becoming your turn alerts too: re-requested, a request for your
+review, a question for you or a mention, or your feedback handled. Each event alerts
+once. When Guided Review prepares the re-review first, the alert waits for it (at most
+10 minutes) and says how much of your feedback was addressed, for example
+`@alice re-requested your review · 4/5 addressed · CI passing · 2 new commits`.
+Opening the review, submitting, or choosing **Not yet** clears the alert.
+Each review has one inbox item; hidden worker threads do not create extra alerts. Enable **Needs You → Settings → Extension activity** to receive
 popups, desktop alerts, or optional Telegram pushes through your chosen channels.
 Quiet hours apply, and a popup stays quiet while you are already viewing that guide.
 

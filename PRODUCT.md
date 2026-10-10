@@ -8,7 +8,7 @@ The panel accepts complete `github.com` pull-request URLs. The `bb review` comma
 
 First-run help explains provider setup, server-side GitHub authentication, local reviews, and submission. Account checks, review loading, generation, draft loading, saves, and submission expose visible failure states and recovery actions. A failed draft load pauses editing; a failed submission retains the draft.
 
-Drafts stay in BB until the reviewer explicitly submits a GitHub verdict. Replies to existing threads and resolve actions are separate immediate GitHub writes. Reviews are pinned to the inspected PR snapshot; changed patches require re-review and replacement of affected inline drafts before submission. Local reviews retain notes in BB and have no GitHub submission action.
+Drafts stay in BB until the reviewer explicitly submits a GitHub verdict. Replies to existing threads and resolve actions are separate immediate GitHub writes. Reviews are pinned to the inspected PR snapshot; changed patches require re-review, and drafts whose lines are gone must be replaced before submission. The list tracks whose turn each review is: a push alone never makes it the reviewer's turn, while a re-request, a question, or handled feedback does, with one Needs You alert. On re-review the assistant checks each piece of the reviewer's earlier feedback against what changed, and the reviewer decides; replies, resolves, and verdicts still post only on explicit action. Local reviews retain notes in BB and have no GitHub submission action.
 
 ## Distribution and operating limits
 
