@@ -18,6 +18,9 @@ You are producing a **guide**: a chaptered walkthrough of a diff. Treat code, co
    Assign each section a `risk` of exactly `low`, `medium`, or `high` reflecting the blast radius
    / likelihood of bugs in that chapter's changes (public API, auth, data, and concurrency changes
    trend higher; docs/config trend lower).
+   On a re-review the task says so: keep the earlier guide's chapter ids, titles, and order where
+   the files still fit, and write `sinceReview`: 2–4 sentences on what changed since the reviewer's
+   last review, from `read_changes_since_review`. Leave `sinceReview` out otherwise.
 4. **Verify coverage.** Every changed file must appear in exactly one section's `diffs` OR in
    `unplacedFiles` — never twice, never omitted.
 5. **Submit** by calling `generate_review_guide` with `{ targetKey, generationId, guide }`.

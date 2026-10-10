@@ -481,7 +481,10 @@ export default async function plugin(bb: BbPluginApi) {
     },
     async switchGhAccount({ login }) {
       const r = await switchGhAccount(runGh, login);
-      if (r.ok) bb.realtime.publish("gh-account", { active: r.active });
+      if (r.ok) {
+        sync.resetViewer();
+        bb.realtime.publish("gh-account", { active: r.active });
+      }
       return r;
     },
     async checkRepoAccess({ targetKey }) {

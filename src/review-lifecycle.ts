@@ -276,5 +276,8 @@ export function createReviewSync(bb: BbPluginApi, store: Store, run: typeof runG
     if (quiet && !disposed) await bb.storage.kv.set("turns:baseline", now);
   }
 
-  return { one, all, evaluate, turnOf };
+  /** The active GitHub account changed: read who you are and your teams again. */
+  function resetViewer() { github.viewer.reset(); checked.clear(); }
+
+  return { one, all, evaluate, turnOf, resetViewer };
 }

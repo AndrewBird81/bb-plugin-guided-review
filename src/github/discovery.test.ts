@@ -15,7 +15,7 @@ function fakeSearch(requested: unknown[], reviewed: unknown[]) {
 test("discoverPrs searches review requests only, unless asked for reviewed PRs too", async () => {
   const run = fakeSearch([node("cli/cli", 1)], [node("cli/cli", 2)]);
   const prs = await discoverPrs(run, { reviewed: false });
-  expect(searched(run)).toEqual(["is:pr is:open archived:false review-requested:@me"]);
+  expect(searched(run)).toEqual(["is:pr is:open archived:false review-requested:@me sort:updated-desc"]);
   expect(prs).toEqual([{
     repo: "cli/cli", number: 1, title: "PR 1", url: "https://github.com/cli/cli/pull/1", author: "alice",
     updatedAt: Date.parse("2026-10-10T12:00:00Z"), isDraft: false, requested: true, reviewed: false,
@@ -29,8 +29,11 @@ test("discoverPrs merges a PR found by both searches, by lowercased repo and num
     [node("Acme/Web", 7, { isDraft: true }), node("cli/cli", 1)],
     [node("acme/web", 7), node("cli/cli", 2, { author: null }), {}],
   );
-  const prs = await discoverPrs(run, { reviewed: true });
-  expect(searched(run)).toEqual(["is:pr is:open archived:false review-requested:@me", "is:pr is:open archived:false reviewed-by:@me -author:@me"]);
+  const prs = await discoverPrs(run, { reviewed: true, now: Date.parse("2026-10-10T12:00:00Z") });
+  expect(searched(run)).toEqual([
+    "is:pr is:open archived:false review-requested:@me sort:updated-desc",
+    "is:pr is:open archived:false reviewed-by:@me -author:@me updated:>=2026-08-11 sort:updated-desc",
+  ]);
   expect(prs.map((p) => [p.repo, p.number, p.requested, p.reviewed])).toEqual([
     ["acme/web", 7, true, true], ["cli/cli", 1, true, false], ["cli/cli", 2, false, true],
   ]);
