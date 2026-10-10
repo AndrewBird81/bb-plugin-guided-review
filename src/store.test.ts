@@ -88,6 +88,12 @@ test("deleteReview clears every per-review table and leaves other reviews intact
     s.saveReviewerNotes(key, "private", 0);
     s.setReviewContext(key, "Implements LIN-1");
     s.addDiscussionMessage(key, { file: "a.ts", line: 1, side: "RIGHT" }, "reviewer", "Why?");
+    s.saveSnapshot(key, "sha1", "diff --git a/a.ts b/a.ts\n");
+    s.saveFeedbackThreads(key, [{ id: "t1", commentId: 1, reviewId: null, path: "a.ts", line: 1, originalLine: 1, startLine: null, side: "RIGHT", subjectType: "LINE",
+      body: "Fix", createdAt: 1, isResolved: false, resolvedBy: null, isOutdated: false, replies: [], status: "open", replyAt: null }], 1);
+    s.saveAssessmentItems(key, "sha1", [{ id: "t1", verdict: "addressed", evidence: "Fixed", assessedAt: 1 }]);
+    s.saveAssessmentRun(key, { headSha: "sha1", summary: "", suggestedVerdict: null, suggestedBody: "", assessedAt: 1 });
+    s.setReplyDraft(key, "t1", "Thanks", "agent");
   }
   s.deleteReview("pr-1");
 
@@ -95,7 +101,9 @@ test("deleteReview clears every per-review table and leaves other reviews intact
   const db = bb.storage.database();
   const tables = (db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as { name: string }[])
     .map((t) => t.name)
-    .filter((name) => (db.prepare(`PRAGMA table_info(${name})`).all() as { name: string }[]).some((c) => c.name === "target_key"));
+    .filter((name) => (db.prepare(`PRAGMA table_info(${name})`).all() as { name: string }[]).some((c) => c.name === "target_key"))
+    // A deleted PR stays out of discovery on purpose.
+    .filter((name) => name !== "discovery_ignores");
   expect(tables.length).toBeGreaterThan(0);
   const count = (table: string, key: string) => (db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE target_key=?`).get(key) as { n: number }).n;
   for (const table of tables) {
@@ -121,4 +129,61 @@ test("draft comments upsert and delete", () => {
   d = s.deleteDraftComment("pr-1", { file: "a.ts", line: 1, side: "RIGHT" })!;
   expect(d.comments.map((c) => c.body)).toEqual(["reworded"]);
   expect(s.deleteDraftComment("pr-1", { file: "a.ts", line: 1, side: "RIGHT" })).toBeNull();
+});
+
+const thread = (id: string, isResolved: boolean): import("./github/types").FeedbackThread => ({
+  id, commentId: 1, reviewId: null, path: "a.ts", line: 1, originalLine: 1, startLine: null, side: "RIGHT", subjectType: "LINE",
+  body: "Fix this", createdAt: 1, isResolved, resolvedBy: null, isOutdated: false, replies: [], status: isResolved ? "resolved" : "open", replyAt: null,
+});
+
+test("feedback threads remember when bb first saw each one resolved", () => {
+  const s = store();
+  s.saveFeedbackThreads("pr-1", [thread("t1", false), thread("t2", true)], 10);
+  const first = s.listFeedbackThreads("pr-1");
+  expect(first.find((t) => t.id === "t1")?.resolvedSeenAt).toBeNull();
+  const seen = first.find((t) => t.id === "t2")!.resolvedSeenAt!;
+  expect(seen).toBeGreaterThan(0);
+  s.saveFeedbackThreads("pr-1", [thread("t2", true)], 20);
+  expect(s.listFeedbackThreads("pr-1")).toMatchObject([{ id: "t2", resolvedSeenAt: seen }]);
+  expect(s.feedbackFetched("pr-1")).toMatchObject({ prUpdatedAt: 20 });
+  // Unresolving forgets it.
+  s.saveFeedbackThreads("pr-1", [thread("t2", false)], 30);
+  expect(s.listFeedbackThreads("pr-1")[0].resolvedSeenAt).toBeNull();
+});
+
+test("snapshots, assessments, and reply drafts round-trip", () => {
+  const s = store();
+  s.saveSnapshot("pr-1", "sha1", "one");
+  s.saveSnapshot("pr-1", "sha2", "two");
+  s.pruneSnapshots("pr-1", ["sha2"]);
+  expect(s.getSnapshot("pr-1", "sha1")).toBeNull();
+  expect(s.getSnapshot("pr-1", "sha2")).toBe("two");
+  s.saveAssessmentItems("pr-1", "sha2", [{ id: "t1", verdict: "partial", evidence: "Half", assessedAt: 5 }]);
+  s.saveAssessmentItems("pr-1", "sha2", [{ id: "t1", verdict: "addressed", evidence: "Done", assessedAt: 6 }]);
+  s.saveAssessmentRun("pr-1", { headSha: "sha2", summary: "All good", suggestedVerdict: "APPROVE", suggestedBody: "Thanks", assessedAt: 6 });
+  expect(s.getAssessment("pr-1", "sha2")).toEqual({ items: [{ id: "t1", verdict: "addressed", evidence: "Done", assessedAt: 6 }], run: expect.objectContaining({ summary: "All good" }) });
+  expect(s.getAssessment("pr-1", "sha1")).toEqual({ items: [], run: null });
+  expect(s.latestAssessmentRun("pr-1")?.headSha).toBe("sha2");
+  s.setReplyDraft("pr-1", "t1", "Fixed, thanks", "agent");
+  expect(s.listReplyDrafts("pr-1").get("t1")).toMatchObject({ body: "Fixed, thanks", author: "agent" });
+  s.deleteReplyDraft("pr-1", "t1");
+  expect(s.listReplyDrafts("pr-1").size).toBe(0);
+  s.ignoreDiscovery("pr-1");
+  expect(s.isDiscoveryIgnored("pr-1")).toBe(true);
+  s.unignoreDiscovery("pr-1");
+  expect(s.isDiscoveryIgnored("pr-1")).toBe(false);
+});
+
+test("a draft comment remembers its line's text and can move with it", () => {
+  const s = store();
+  s.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, status: "ready", createdAt: 1 });
+  s.savePatch("pr-1", "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,2 @@\n context\n+added line\n");
+  s.upsertDraftComment("pr-1", { file: "a.ts", line: 2, side: "RIGHT", body: "Why?" });
+  expect(s.draftCommentCode("pr-1", { file: "a.ts", line: 2, side: "RIGHT" })).toBe("added line");
+  s.savePatch("pr-1", "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,3 @@\n context\n+new first\n+added line\n");
+  expect(s.staleDraftComments("pr-1")).toHaveLength(1);
+  s.rebaseDraftComment("pr-1", { file: "a.ts", line: 2, side: "RIGHT" }, 3);
+  expect(s.getDraft("pr-1").comments).toMatchObject([{ line: 3, body: "Why?" }]);
+  expect(s.staleDraftComments("pr-1")).toHaveLength(0);
+  expect(s.draftCommentCode("pr-1", { file: "a.ts", line: 3, side: "RIGHT" })).toBe("added line");
 });

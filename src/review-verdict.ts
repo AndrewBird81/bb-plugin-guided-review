@@ -43,3 +43,8 @@ export function verdictOf(reviews: ReviewNode[]): Verdicted | null {
   const verdict: Verdict | null = state === "APPROVED" ? "APPROVE" : state === "CHANGES_REQUESTED" ? "REQUEST_CHANGES" : state === "COMMENTED" ? "COMMENT" : null;
   return { verdict, at: Date.parse(latest.submittedAt!), sha: latest.commit?.oid ?? null };
 }
+
+/** verdictOf for reviews the sync already filtered to real ones. */
+export function verdictFromMine(reviews: ReadonlyArray<{ state: string; submittedAt: number; sha: string | null; body: string }>): Verdicted | null {
+  return verdictOf(reviews.map((r) => ({ state: r.state, submittedAt: new Date(r.submittedAt).toISOString(), body: r.body, commit: r.sha ? { oid: r.sha } : null, comments: null })));
+}

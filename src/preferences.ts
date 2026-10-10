@@ -11,6 +11,9 @@ export const agentExecutionSchema = z.object({
   permissionMode: z.enum(["accept-edits", "auto", "full"]),
   serviceTier: z.string().min(1).max(200).optional(),
 }).strict();
+/** "*", "owner/*", or "owner/repo", as GitHub spells them. */
+const REPO_PATTERN = /^(\*|[a-z0-9-]+\/(\*|[a-z0-9_.-]+))$/;
+
 export const agentChoiceSchema = agentExecutionSchema.omit({ permissionMode: true });
 
 export const preferencesSchema = z.object({
@@ -21,6 +24,11 @@ export const preferencesSchema = z.object({
   diffLayout: z.enum(["split", "unified"]),
   guideAgent: agentExecutionSchema.nullable(),
   assistantAgent: agentExecutionSchema.nullable(),
+  wakeOnReplies: z.enum(["questions", "any"]),
+  pushChecks: z.enum(["off", "progress", "ready"]),
+  trackGithubReviews: z.boolean(),
+  autoStartRepos: z.array(z.string().trim().toLowerCase().regex(REPO_PATTERN, "Use owner/repo, owner/*, or *.")).max(50),
+  verificationPrompt: z.string().max(12000),
 }).strict();
 
 export interface PreferencesRecord { preferences: ReviewPreferences; revision: number; }
