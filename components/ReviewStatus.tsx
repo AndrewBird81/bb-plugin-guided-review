@@ -3,19 +3,29 @@ import { cn } from "../lib/utils";
 import { Badge, type Tone } from "./ui/badge";
 import { Icon, type IconName } from "./ui/icon";
 
-/** How a review's status reads: GitHub's verdict colors, amber for work in progress. */
+/** How a review's status reads: GitHub's verdict colors, amber for work in progress, chosen by whose turn it is and why. */
 export function statusLook(review: ReviewItem): { label: string; tone: Tone; icon?: IconName; busy?: boolean } {
-  const { label } = reviewState(review);
+  const { label, reason } = reviewState(review);
   if (label === "Generating") return { label, tone: "warning", icon: "Loading", busy: true };
-  if (label === "Failed") return { label, tone: "danger", icon: "AlertTriangle" };
-  if (label === "Merged") return { label, tone: "merged", icon: "GitMerge" };
-  if (label === "Closed") return { label, tone: "danger", icon: "GitPullRequestClosed" };
-  if (label === "Archived") return { label, tone: "neutral", icon: "Archive" };
-  if (label.endsWith("new commits")) return { label, tone: "primary", icon: "GitCommit" };
-  if (label === "Approved") return { label, tone: "success", icon: "Check" };
-  if (label === "Changes requested") return { label, tone: "warning", icon: "FileDiff" };
-  if (label === "Commented") return { label, tone: "neutral", icon: "MessageSquare" };
-  return { label, tone: "primary" };
+  switch (reason) {
+    case "failed": return { label, tone: "danger", icon: "AlertTriangle" };
+    case "merged": return { label, tone: "merged", icon: "GitMerge" };
+    case "closed": return { label, tone: "danger", icon: "GitPullRequestClosed" };
+    case "archived": return { label, tone: "neutral", icon: "Archive" };
+    case "re-requested": return { label, tone: "primary", icon: "Repeat" };
+    case "team-requested": return { label, tone: "neutral" };
+    case "question": return { label, tone: "warning", icon: "MessageQuestion" };
+    case "mentioned": return { label, tone: "primary", icon: "MessageSquare" };
+    case "handled": return { label, tone: "success", icon: "CircleCheck" };
+    case "looks-ready": return { label, tone: "agent", icon: "Sparkles" };
+    case "dismissed": return { label, tone: "warning", icon: "AlertCircle" };
+    case "waiting": return label === "Changes requested" ? { label, tone: "warning", icon: "FileDiff" } : { label, tone: "neutral", icon: "MessageSquare" };
+    case "snoozed": return { label, tone: "neutral", icon: "Clock" };
+    case "draft": return { label, tone: "neutral", icon: "GitPullRequestDraft" };
+    case "approved": return { label, tone: "success", icon: "Check" };
+    case "commented": return { label, tone: "neutral", icon: "MessageSquare" };
+    default: return { label, tone: "primary" };
+  }
 }
 
 /** The pull request (or local change) itself, colored like GitHub: open, merged, closed. */

@@ -61,6 +61,19 @@ function AgentSelection({ label, agent, machines, disabled, note, onCustomize, o
   </div>;
 }
 
+/** One repository pattern per line, as saved: trimmed, lowercase, no blanks. */
+function parseRepoPatterns(text: string): string[] {
+  return text.split("\n").map((line) => line.trim().toLowerCase()).filter(Boolean);
+}
+
+/** Keeps the typed text, blank lines included, while the saved list follows it. */
+function RepoPatterns({ value, onChange }: { value: string[]; onChange(value: string[]): void }) {
+  const [text, setText] = useState(value.join("\n"));
+  // Follow loads, discards, and restored defaults.
+  if (parseRepoPatterns(text).join("\n") !== value.join("\n")) setText(value.join("\n"));
+  return <Textarea aria-label="Start guides automatically" aria-describedby="auto-start-help" rows={3} value={text} placeholder={"acme/app\nacme/*"} className="font-mono text-xs" onChange={(event) => { setText(event.target.value); onChange(parseRepoPatterns(event.target.value)); }} />;
+}
+
 function SectionHeading({ icon, tone = "primary", title, description }: { icon: IconName; tone?: Tone; title: string; description?: string }) {
   return <div className="flex items-start gap-3">
     <IconTile tone={tone} icon={icon} />
@@ -126,7 +139,7 @@ export function ReviewSettings({ onBack }: { onBack?: () => void }) {
       <ReleaseSettings clientId={session.clientId} disabled={dirty || busy} onUpdatingChange={setUpdating} />
       <section className="space-y-3 rounded-xl border border-border bg-card p-5 shadow-xs">
         <SectionHeading icon="Mail" title="Guide notifications" />
-        <p className="max-w-[75ch] text-sm text-muted-foreground">Needs You can alert you when a guide is ready or generation fails, with a link back to the review. Install or update Needs You to 0.2.0-beta.3 or later, then enable Extension activity in its Settings. Telegram is optional.</p>
+        <p className="max-w-[75ch] text-sm text-muted-foreground">Needs You can alert you when a guide is ready or generation fails, and when a review becomes your turn: re-requested, a question for you, or your feedback handled. Each alert links back to the review and clears when you open it. Install or update Needs You to 0.2.0-beta.3 or later, then enable Extension activity in its Settings. Telegram is optional.</p>
         <a className="inline-block text-sm text-primary underline underline-offset-4" href="/plugins/inbox/inbox/settings" target="_blank" rel="noreferrer">Open Needs You settings</a>
       </section>
       {error && <div role="alert" className="space-y-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive-text"><p className="flex items-start gap-2"><Icon name="AlertCircle" className="mt-0.5 size-4 shrink-0" aria-hidden />{error}</p><Button variant="outline" size="sm" disabled={busy || updating} onClick={() => void load()}>Reload saved settings</Button></div>}
@@ -146,6 +159,18 @@ export function ReviewSettings({ onBack }: { onBack?: () => void }) {
             <AgentSelection label="Review assistant agent" agent={record.preferences.assistantAgent} machines={machines} disabled={busy || updating} note="Used to start new conversations, which stay on the machine they started on. In a conversation, change the model and effort per message." onCustomize={() => void customize("assistantAgent")} onChange={(update) => setAgent("assistantAgent", update)} />
             <label className="block space-y-2"><span className="text-sm font-medium">Assistant instructions</span><Textarea aria-label="Assistant instructions" maxLength={12000} rows={5} value={record.preferences.assistantInstructions} onChange={(event) => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, assistantInstructions: event.target.value } }); }} placeholder="Prioritize correctness and security. Show a concrete failure case for suspected bugs. Keep suggestions actionable." /></label>
             <label className="block space-y-2"><span className="text-sm font-medium">Automatic review</span><Textarea aria-label="Automatic review" maxLength={12000} rows={4} value={record.preferences.automaticReview} onChange={(event) => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, automaticReview: event.target.value } }); }} /><span className="block text-xs text-muted-foreground">Sent to the assistant when a guide is ready and the review has no conversation yet. Its draft comments wait in Draft comments for you to edit and submit. Leave blank to turn the automatic review off.</span></label>
+          </section>
+          <section className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-xs">
+            <SectionHeading icon="ListTodo" title="Whose turn" description="What brings a review back to Needs review, and which reviews to follow." />
+            <div className="space-y-2"><p id="wake-on-replies-label" className="text-sm font-medium">When the author replies</p><div role="group" aria-labelledby="wake-on-replies-label" className="flex flex-wrap gap-2">
+              {([ ["questions", "Questions for you"], ["any", "Any reply"] ] as const).map(([value, label]) => <Button key={value} variant="outline" size="sm" className="aria-pressed:border-primary/50 aria-pressed:bg-primary/10 aria-pressed:text-primary" aria-pressed={record.preferences.wakeOnReplies === value} onClick={() => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, wakeOnReplies: value } }); }}>{label}</Button>)}
+            </div></div>
+            <div className="space-y-2"><p id="push-checks-label" className="text-sm font-medium">After the author pushes</p><div role="group" aria-labelledby="push-checks-label" aria-describedby="push-checks-help" className="flex flex-wrap gap-2">
+              {([ ["off", "Do nothing"], ["progress", "Check my feedback"], ["ready", "Check, and bring it back when everything’s addressed"] ] as const).map(([value, label]) => <Button key={value} variant="outline" size="sm" className="aria-pressed:border-primary/50 aria-pressed:bg-primary/10 aria-pressed:text-primary" aria-pressed={record.preferences.pushChecks === value} onClick={() => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, pushChecks: value } }); }}>{label}</Button>)}
+            </div><p id="push-checks-help" className="text-xs text-muted-foreground">The review assistant checks once the author’s pushes settle, using the Review assistant agent.</p></div>
+            <label className="flex items-start gap-2.5"><input type="checkbox" className="mt-0.5 size-4 accent-primary" checked={record.preferences.trackGithubReviews} onChange={(event) => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, trackGithubReviews: event.target.checked } }); }} /><span className="space-y-1"><span className="block text-sm font-medium">Track reviews from GitHub</span><span className="block text-xs text-muted-foreground">Show PRs you’re asked to review or have reviewed on GitHub, not only reviews started here.</span></span></label>
+            <label className="block space-y-2"><span className="text-sm font-medium">Start guides automatically</span><RepoPatterns value={record.preferences.autoStartRepos} onChange={(autoStartRepos) => { setSaved(false); setRecord((current) => current && { ...current, preferences: { ...current.preferences, autoStartRepos } }); }} /><span id="auto-start-help" className="block text-xs text-muted-foreground">One per line: <code className="font-mono">owner/repo</code>, <code className="font-mono">owner/*</code>, or <code className="font-mono">*</code>. When your review is requested there, the guide is ready by the time you’re alerted.</span></label>
+            <label className="block space-y-2"><span className="text-sm font-medium">Re-review check</span><Textarea aria-label="Re-review check" maxLength={12000} rows={4} value={record.preferences.verificationPrompt} onChange={(event) => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, verificationPrompt: event.target.value } }); }} /><span className="block text-xs text-muted-foreground">Sent to the review assistant when a review comes back to you. Leave blank to turn it off.</span></label>
           </section>
           <section className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-xs">
             <SectionHeading icon="Columns2" title="Reading layout" description="Choose the default diff layout. Narrow screens use a single column." />

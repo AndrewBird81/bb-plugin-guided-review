@@ -1,8 +1,8 @@
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { useRpc } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
-import type { ReviewItem } from "../lib/review-state";
+import { reviewState, type ReviewItem } from "../lib/review-state";
 import { updateDraftRecovery } from "../lib/draft-recovery";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -10,7 +10,7 @@ import { Icon } from "./ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 
-/** Archive, unarchive, or permanently delete one saved review. */
+/** Start a tracked review, set it aside ("Not yet"), archive, unarchive, or permanently delete one saved review. */
 export function ReviewActions({ review, onChanged, onDeleted, describedBy, className }: {
   review: ReviewItem;
   onChanged?: () => void;
@@ -24,9 +24,13 @@ export function ReviewActions({ review, onChanged, onDeleted, describedBy, class
   const [menuOpen, setMenuOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const snoozeHintId = useId();
   const title = review.title ?? review.gitRef ?? review.targetKey;
   // GitHub state archives merged and closed PRs; only the reviewer's own archive can be undone.
   const closed = review.prState === "MERGED" || review.prState === "CLOSED" || !!review.archivedAt;
+  const turn = reviewState(review);
+  // Only a review you've already given can wait for the author.
+  const canSnooze = turn.group === "needs" && (!!review.submittedVerdict || !!review.signals?.lastReviewAt);
 
   async function run(call: () => Promise<{ ok: boolean; error?: string }>, success: string) {
     setBusy(true);
@@ -49,6 +53,18 @@ export function ReviewActions({ review, onChanged, onDeleted, describedBy, class
     if (ok) onChanged?.();
   }
 
+  async function setSnoozed(snoozed: boolean) {
+    setMenuOpen(false);
+    const ok = await run(() => rpc.call("snoozeReview", { targetKey: review.targetKey, snoozed }), snoozed ? "Moved to Waiting on author" : "Moved to Needs review");
+    if (ok) onChanged?.();
+  }
+
+  async function startTracked() {
+    setMenuOpen(false);
+    const ok = await run(() => rpc.call("startTrackedReview", { targetKey: review.targetKey }), "Generating the guide");
+    if (ok) onChanged?.();
+  }
+
   async function remove() {
     if (!await run(() => rpc.call("deleteReview", { targetKey: review.targetKey }), "Review deleted")) return;
     // This tab's unsaved-text recovery must not resurface if the PR is reviewed again.
@@ -65,6 +81,18 @@ export function ReviewActions({ review, onChanged, onDeleted, describedBy, class
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" mobileTitle="Review actions" className="w-60 max-w-[calc(100vw-24px)] p-1">
+        {review.status === "tracked" && <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground hover:text-foreground" onClick={() => void startTracked()}>
+          <Icon name="Sparkles" aria-hidden />Start review
+        </Button>}
+        {canSnooze && <>
+          <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground hover:text-foreground" aria-describedby={snoozeHintId} onClick={() => void setSnoozed(true)}>
+            <Icon name="Clock" aria-hidden />Not yet
+          </Button>
+          <p id={snoozeHintId} className="px-3 pb-2 text-xs text-muted-foreground">Hides it until the author re-requests, answers, or asks you</p>
+        </>}
+        {turn.reason === "snoozed" && <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground hover:text-foreground" onClick={() => void setSnoozed(false)}>
+          <Icon name="ArrowTurnBackward" aria-hidden />Back to Needs review
+        </Button>}
         {!closed && <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground hover:text-foreground" onClick={() => void setArchived(!review.userArchivedAt)}>
           <Icon name={review.userArchivedAt ? "ArchiveRestore" : "Archive"} aria-hidden />{review.userArchivedAt ? "Unarchive" : "Archive"}
         </Button>}

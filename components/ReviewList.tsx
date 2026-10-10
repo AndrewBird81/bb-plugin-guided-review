@@ -13,25 +13,89 @@ import { ReviewActions } from "./ReviewActions";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Avatar } from "./ui/avatar";
 import { StatusBadge, kindLook } from "./ReviewStatus";
+import { Badge, TONE_TEXT } from "./ui/badge";
+import type { Turn, TurnGroup } from "../lib/turn";
 import { IconTile } from "./ui/icon-tile";
 import { InlineCode } from "./ui/inline-code";
 
-/** Compact "2h ago" relative time. Returns null for absent/implausible stamps. */
-function timeAgo(ts?: number): string | null {
+/** Compact elapsed time, such as "2h", or "now". Returns null for absent/implausible stamps. */
+function age(ts?: number | null): string | null {
   if (typeof ts !== "number" || !Number.isFinite(ts) || ts < 1_000_000_000_000) return null;
   const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (s < 45) return "just now";
+  if (s < 45) return "now";
   const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m ago`;
+  if (m < 60) return `${m}m`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
+  if (h < 24) return `${h}h`;
   const d = Math.floor(h / 24);
-  if (d < 7) return `${d}d ago`;
+  if (d < 7) return `${d}d`;
   const w = Math.floor(d / 7);
-  if (w < 5) return `${w}w ago`;
+  if (w < 5) return `${w}w`;
   const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo}mo ago`;
-  return `${Math.floor(d / 365)}y ago`;
+  if (mo < 12) return `${mo}mo`;
+  return `${Math.floor(d / 365)}y`;
+}
+
+/** Compact "2h ago" relative time. Returns null for absent/implausible stamps. */
+function timeAgo(ts?: number): string | null {
+  const elapsed = age(ts);
+  return elapsed === "now" ? "just now" : elapsed && `${elapsed} ago`;
+}
+
+/** Why it's your turn, with who asked when GitHub says. Null when the status badge says it all. */
+function turnWhy(review: ReviewItem, turn: Turn): string | null {
+  const s = review.signals ?? {};
+  const by = (prefix: string, login?: string | null) => login ? `${prefix} @${login}` : null;
+  const why = turn.reason === "re-requested" ? by("Re-requested by", s.requestedBy) ?? "Re-requested"
+    : turn.reason === "requested" ? by("Requested by", s.requestedBy) ?? "Review requested"
+    : turn.reason === "team-requested" ? by("Team request from", s.requestedBy) ?? "Team review requested"
+    : turn.reason === "question" ? (turn.label === "Author replied" || (turn.at != null && turn.at !== s.questionAt && turn.at === s.replyAt) ? "Author replied" : "Question for you")
+    : turn.reason === "mentioned" ? by("Mentioned by", s.mentionBy) ?? "Mentioned you"
+    : turn.reason === "handled" ? "Feedback handled"
+    : turn.reason === "looks-ready" ? "Looks ready"
+    : turn.reason === "dismissed" ? "Review dismissed"
+    : null;
+  return why === turn.label ? null : why;
+}
+
+const CI_LOOK = {
+  pass: { label: "Checks passing", tone: "success", icon: "Check" },
+  fail: { label: "Checks failing", tone: "danger", icon: "X" },
+  pending: { label: "Checks pending", tone: "warning", icon: "CircleDashed" },
+} as const;
+
+/** The row's second line: why, progress on your feedback, new commits, CI, and how long it's been your turn. */
+function TurnMeta({ review, turn }: { review: ReviewItem; turn: Turn }) {
+  const why = turnWhy(review, turn);
+  const progress = review.progress;
+  const commits = review.signals?.commitsSince ?? 0;
+  const ci = review.signals?.ci && review.signals.ci !== "none" ? CI_LOOK[review.signals.ci] : null;
+  const waited = turn.group === "needs" ? age(turn.at) : null;
+  if (!why && !progress && commits <= 0 && !ci && !waited && !turn.blocking) return null;
+  return (
+    <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+      {turn.blocking && <Badge tone="warning" size="sm">Blocks merge</Badge>}
+      {why && <span>{why}</span>}
+      {progress && <span className="tabular-nums">{progress.done}/{progress.total} {progress.source === "assistant" ? "addressed" : "resolved"}</span>}
+      {commits > 0 && <span className="inline-flex items-center gap-1 tabular-nums"><Icon name="GitCommit" className="size-3" aria-hidden />+{commits} {commits === 1 ? "commit" : "commits"}</span>}
+      {ci && <span className="inline-flex items-center gap-1"><Icon name={ci.icon} className={cn("size-3", TONE_TEXT[ci.tone])} aria-hidden />{ci.label}</span>}
+      {waited && <span className="text-subtle-foreground">your turn · {waited}</span>}
+    </span>
+  );
+}
+
+/** Needs review: blocking first, then direct requests before team requests, then longest waiting. */
+function needsOrder(a: ReviewItem, b: ReviewItem): number {
+  const ta = reviewState(a), tb = reviewState(b);
+  return Number(tb.blocking) - Number(ta.blocking)
+    || Number(ta.reason === "team-requested") - Number(tb.reason === "team-requested")
+    || (ta.at ?? a.createdAt ?? 0) - (tb.at ?? b.createdAt ?? 0);
+}
+
+/** Waiting on author: most recent activity first. */
+function waitingOrder(a: ReviewItem, b: ReviewItem): number {
+  const activity = (review: ReviewItem) => Math.max(reviewState(review).at ?? 0, review.signals?.headSeenAt ?? 0) || (review.createdAt ?? 0);
+  return activity(b) - activity(a);
 }
 
 function ReviewRow({ review, onOpen, onChanged }: { review: ReviewItem; onOpen: () => void; onChanged: () => void }) {
@@ -50,6 +114,7 @@ function ReviewRow({ review, onOpen, onChanged }: { review: ReviewItem; onOpen: 
           {review.author && <span className="inline-flex items-center gap-1.5"><Avatar login={review.author} size={16} />@{review.author}</span>}
           {when && <span className="text-subtle-foreground">{when}</span>}
         </span>
+        <TurnMeta review={review} turn={state} />
       </span>
       <span className="flex shrink-0 items-center gap-3">
         <span className="hidden items-center gap-0.5 text-xs text-muted-foreground opacity-0 transition-opacity duration-150 group-hover/row:text-foreground group-hover/row:opacity-100 group-focus-within/row:opacity-100 @min-[640px]/review-list:inline-flex">{state.action}<Icon name="ChevronRight" className="size-3.5" aria-hidden /></span>
@@ -84,7 +149,7 @@ export const ReviewList = memo(function ReviewList() {
   const [loadError, setLoadError] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
-  const [filter, setFilter] = useState<"active" | "reviewed" | "archive">("active");
+  const [filter, setFilter] = useState<TurnGroup>("needs");
   const [refreshing, setRefreshing] = useState(false);
   const [syncError, setSyncError] = useState(false);
   const refresh = useCallback(async () => {
@@ -130,6 +195,10 @@ export const ReviewList = memo(function ReviewList() {
   );
 
   const visible = sorted.filter((review) => reviewState(review).group === filter);
+  if (filter === "needs") visible.sort(needsOrder);
+  if (filter === "waiting") visible.sort(waitingOrder);
+  const teamStart = filter === "needs" ? visible.findIndex((review) => reviewState(review).reason === "team-requested") : -1;
+  const row = (review: ReviewItem) => <ReviewRow key={review.targetKey} review={review} onOpen={() => open(review.targetKey)} onChanged={relist} />;
 
   function open(targetKey: string) {
     navigate.toPluginPanel("review", { subPath: targetKey });
@@ -156,7 +225,8 @@ export const ReviewList = memo(function ReviewList() {
   }
 
   const tabs = [
-    { value: "active", label: "Needs review", icon: "ListTodo" },
+    { value: "needs", label: "Needs review", icon: "ListTodo" },
+    { value: "waiting", label: "Waiting on author", icon: "TimeSchedule" },
     { value: "reviewed", label: "Reviewed", icon: "CircleCheck" },
     { value: "archive", label: "Archive", icon: "Archive" },
   ] as const;
@@ -257,10 +327,16 @@ export const ReviewList = memo(function ReviewList() {
         {loading ? <div role="status" aria-busy="true" className="divide-y divide-border"><span className="sr-only">Loading reviews…</span>{Array.from({ length: 4 }).map((_, i) => <div key={i} className="flex items-center gap-3.5 px-4 py-3.5"><Skeleton className="size-8 shrink-0 rounded-lg" /><div className="flex-1 space-y-2"><Skeleton className="h-3.5" style={{ width: `${62 - i * 7}%` }} /><Skeleton className="h-3 w-48" /></div><Skeleton className="h-5 w-16 rounded-full" /></div>)}</div>
           : loadError ? <div role="alert" className="px-4 py-10 text-center"><h2 className="font-medium">Couldn’t load your reviews</h2><p className="mt-2 text-sm text-muted-foreground">Your saved reviews haven’t been removed. Check the connection and try again.</p><Button variant="outline" className="mt-4" onClick={() => setReload((n) => n + 1)}>Try again</Button></div>
           : visible.length === 0 ? (filter === "archive" ? <EmptyState icon="Archive" tone="neutral" title="No archived reviews">Merged and closed pull requests move here automatically, along with reviews you archive.</EmptyState>
+            : filter === "waiting" ? <EmptyState icon="TimeSchedule" tone="neutral" title="Nothing waiting on authors">Reviews where you requested changes wait here until the author re-requests your review, answers your feedback, or asks you something.</EmptyState>
             : filter === "reviewed" ? <EmptyState icon="CircleCheck" tone="neutral" title="No submitted reviews yet">Your submitted verdicts appear here, ready to revisit.</EmptyState>
             : sorted.length ? <EmptyState icon="Check" tone="success" title="You’re all caught up">Paste a pull request URL above to start a review.</EmptyState>
             : <EmptyState icon="GitPullRequest" tone="neutral" title="No reviews yet">Paste a pull request URL above to start a review.</EmptyState>)
-          : <div className="divide-y divide-border">{visible.map((review) => <ReviewRow key={review.targetKey} review={review} onOpen={() => open(review.targetKey)} onChanged={relist} />)}</div>}
+          : teamStart < 0 ? <div className="divide-y divide-border">{visible.map(row)}</div>
+          : <>
+            {teamStart > 0 && <div className="divide-y divide-border border-b border-border">{visible.slice(0, teamStart).map(row)}</div>}
+            <h2 className="bg-muted/25 px-4 py-1.5 text-xs font-medium text-muted-foreground">Team requests</h2>
+            <div className="divide-y divide-border border-t border-border">{visible.slice(teamStart).map(row)}</div>
+          </>}
       </section>
     </div>
   );
