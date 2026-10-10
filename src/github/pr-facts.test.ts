@@ -88,6 +88,7 @@ test("requests match the viewer case-insensitively and teams the viewer is on", 
     { at: Date.parse("2026-10-01T00:00:00Z"), by: "alice", via: "user" },
     { at: Date.parse("2026-10-02T00:00:00Z"), by: "alice", via: "team", team: "acme/web-core" },
   ]);
+  expect(facts.requestRemovedAt).toBe(Date.parse("2026-10-05T00:00:00Z"));
 });
 
 test("requestPending prefers a direct request over a team one", () => {

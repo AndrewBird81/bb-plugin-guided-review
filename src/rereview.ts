@@ -4,13 +4,16 @@ import { ensureGitHeaders } from "./patch";
 import { generateGuide, guideWriterUnavailable } from "./generate";
 import { gitDiffArgs } from "./gh";
 import { readPrSnapshot } from "./pr-snapshot";
+import { reanchor } from "./reanchor";
+import { pruneDiffs } from "./feedback-view";
 
 interface Deps {
   bb: BbPluginApi; store: Store;
   gh: { runGh: typeof import("./gh").runGh; runGit: typeof import("./gh").runGit };
 }
 
-export async function rerunReview(deps: Deps, targetKey: string): Promise<{ ok: boolean; error?: string }> {
+/** Re-read the target and regenerate its guide. `notify: false` leaves alerts to the turn that asked for it. */
+export async function rerunReview(deps: Deps, targetKey: string, options: { notify?: boolean } = {}): Promise<{ ok: boolean; error?: string }> {
   const m = deps.store.getReview(targetKey);
   if (!m || !m.projectId) return { ok: false, error: "Unknown review or missing project." };
   const unavailable = await guideWriterUnavailable(deps.bb, deps.store);
@@ -38,8 +41,17 @@ export async function rerunReview(deps: Deps, targetKey: string): Promise<{ ok: 
   }
   if (!patch.trim()) return { ok: false, error: "No changes found." };
 
-  deps.store.savePatch(targetKey, ensureGitHeaders(patch));
+  const previous = deps.store.readPatch(targetKey, 0, deps.store.readPatch(targetKey, 0, 0).total).text;
+  const next = ensureGitHeaders(patch);
+  deps.store.savePatch(targetKey, next);
   deps.store.saveReview({ ...m, status: "generating" });
-  void generateGuide(deps.bb, deps.store, targetKey, m.projectId);
+  if (m.headSha) deps.store.saveSnapshot(targetKey, m.headSha, next);
+  // Unsent draft comments follow their lines into the new diff; ones whose lines are gone stay flagged.
+  for (const comment of deps.store.getDraft(targetKey).comments) {
+    const placed = reanchor({ ...comment, code: deps.store.draftCommentCode(targetKey, comment) }, previous, next);
+    if (placed.status !== "lost") deps.store.rebaseDraftComment(targetKey, comment, placed.status === "moved" ? placed.line : comment.line);
+  }
+  pruneDiffs(deps.store, deps.store.getReview(targetKey)!);
+  void generateGuide(deps.bb, deps.store, targetKey, m.projectId, options);
   return { ok: true };
 }

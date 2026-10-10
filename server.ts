@@ -42,28 +42,50 @@ import { getGhAccounts, switchGhAccount, checkRepoAccess } from "./src/gh-accoun
 
 import { completionNotifications } from "./src/completion-notifications";
 import { createPluginUpdates } from "./src/plugin-updates";
+import { onPrepared } from "./src/generate";
+import { feedbackProgress } from "./lib/turn";
+import { baselineOf, feedbackView, headOf, pruneDiffs, remainingBody, sinceReview } from "./src/feedback-view";
+import { assess, changesSinceReview, describeFeedback, readFileAt, startVerification } from "./src/verification";
+import { fetchMyThreads } from "./src/github/threads";
+import type { ReviewMeta } from "./src/store";
+import { threadSignals } from "./src/turn-signals";
 
 export { rpcContract } from "./src/rpc-contract";
 
-// Placeholder until the whose-turn handlers land.
-function pendingHandlers() {
-  const pending = () => { throw new Error("Not available yet."); };
-  return {
-    snoozeReview: pending, markSeen: pending, startTrackedReview: pending, getFeedback: pending, refreshFeedback: pending,
-    checkFeedback: pending, replyToFeedback: pending, saveReplyDraft: pending, discardReplyDraft: pending,
-    useSuggestedVerdict: pending, getSinceReview: pending,
-  };
-}
 
 // Raise when the review assistant's tools change.
-const ASSISTANT_TOOLS = 2;
+const ASSISTANT_TOOLS = 3;
 
 export default async function plugin(bb: BbPluginApi) {
   const store = createStore(bb);
   store.interruptGenerations();
   const submitReview = createReviewSubmitter(store, runGh);
-  const sync = createReviewSync(bb, store, runGh);
   const notifications = completionNotifications(bb, store);
+  let personalProject: string | null = null;
+  const reasons: Record<string, string> = {
+    "re-requested": "the author re-requested the reviewer's review", handled: "every thread of the reviewer's feedback is resolved or answered",
+    "looks-ready": "the last check found the feedback addressed", dismissed: "GitHub dismissed the reviewer's review",
+  };
+  const sync = createReviewSync(bb, store, runGh, { actions: {
+    async prepare(targetKey, reason) {
+      const review = store.getReview(targetKey);
+      if (!review) return false;
+      // An out-of-date guide is rebuilt first; its completion starts the check.
+      if (review.status === "tracked" || review.headSha !== headOf(review)) return (await rerunReview({ bb, store, gh: { runGh, runGit } }, targetKey, { notify: false })).ok;
+      return startVerification(bb, store, targetKey, reasons[reason] ?? "the review came back to the reviewer");
+    },
+    checkPushes: (targetKey) => startVerification(bb, store, targetKey, "the author pushed new commits and they have settled"),
+    async autoStart(targetKey) {
+      return (await rerunReview({ bb, store, gh: { runGh, runGit } }, targetKey, { notify: false })).ok;
+    },
+    async projectId() {
+      if (personalProject) return personalProject;
+      const projects = await bb.sdk.projects.list({ includePersonal: true }).catch(() => []);
+      personalProject = (projects.find((p) => p.kind === "personal") ?? projects[0])?.id ?? null;
+      return personalProject;
+    },
+  } });
+  onPrepared(bb, (targetKey) => { void sync.evaluate(targetKey); });
   const updates = createPluginUpdates(bb, () => hasGuideGenerations(bb));
   bb.background.service("plugin-updates", {
     async start(signal) {
@@ -86,6 +108,119 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.log.info("guided-review loaded");
 
+  // Reviews leave the server with whose turn they are and how far your feedback got.
+  // JSON round-trips drop the literal `undefined` fields rowToMeta leaves, which strict rpc output rejects.
+  const decorate = (review: ReviewMeta | null) => review && JSON.parse(JSON.stringify({ ...review, turn: sync.turnOf(review), progress: feedbackProgress(review) }));
+  const changed = (targetKey: string) => {
+    bb.realtime.publish(`review:${targetKey}`, { ts: Date.now() });
+    bb.realtime.publish("reviews", { ts: Date.now() });
+  };
+  /** Re-read your threads on a PR now. */
+  async function refreshThreads(review: ReviewMeta) {
+    if (review.kind !== "pr" || !review.repo || !review.number || !baselineOf(review).at) return;
+    const login = (await runGh(["api", "user", "--jq", ".login"])).stdout.trim();
+    if (!login) return;
+    store.saveFeedbackThreads(review.targetKey, await fetchMyThreads(runGh, review.repo, review.number, login), store.feedbackFetched(review.targetKey)?.prUpdatedAt ?? null);
+    store.setLifecycle(review.targetKey, { signals: { ...store.getReview(review.targetKey)!.signals, ...threadSignals(store.listFeedbackThreads(review.targetKey)) } });
+    bb.realtime.publish(`feedback:${review.targetKey}`, { ts: Date.now() });
+  }
+  const view = (targetKey: string) => {
+    const review = store.getReview(targetKey);
+    return review ? feedbackView(store, review) : null;
+  };
+
+  function turnHandlers() {
+    return {
+      async snoozeReview({ targetKey, snoozed }: { targetKey: string; snoozed: boolean }) {
+        if (!store.getReview(targetKey)) return { ok: false, error: "This review no longer exists." };
+        store.setLifecycle(targetKey, { snoozedAt: snoozed ? Date.now() : null });
+        if (snoozed) await notifications.dismiss(targetKey);
+        await sync.evaluate(targetKey);
+        changed(targetKey);
+        return { ok: true };
+      },
+      async markSeen({ targetKey }: { targetKey: string }) {
+        await notifications.dismiss(targetKey);
+        return { ok: true };
+      },
+      async startTrackedReview({ targetKey }: { targetKey: string }) {
+        const review = store.getReview(targetKey);
+        if (!review) return { ok: false, error: "This review no longer exists." };
+        if (review.status === "generating") return { ok: true };
+        const result = await rerunReview({ bb, store, gh: { runGh, runGit } }, targetKey);
+        changed(targetKey);
+        return result;
+      },
+      getFeedback({ targetKey }: { targetKey: string }) {
+        return { feedback: view(targetKey) };
+      },
+      async refreshFeedback({ targetKey }: { targetKey: string }) {
+        const review = store.getReview(targetKey);
+        if (review) await refreshThreads(review).catch((error) => bb.log.warn(`Could not read your threads on ${targetKey}: ${String(error)}`));
+        await sync.evaluate(targetKey);
+        return { feedback: view(targetKey) };
+      },
+      async checkFeedback({ targetKey }: { targetKey: string }) {
+        const review = store.getReview(targetKey);
+        if (!review) return { ok: false, error: "This review no longer exists." };
+        if (!baselineOf(review).at) return { ok: false, error: "Submit a review first; then the assistant can check your feedback." };
+        if (!store.getPreferences().preferences.verificationPrompt.trim()) return { ok: false, error: "The re-review check is off. Turn it on in Review settings." };
+        if (await isAssistantAnswering(bb, store, targetKey)) return { ok: false, error: "The assistant is still answering. Try again when it finishes." };
+        await refreshThreads(review).catch(() => {});
+        return await startVerification(bb, store, targetKey, "the reviewer asked for a check") ? { ok: true } : { ok: false, error: "The assistant couldn't start. Open Ask agent to choose its agent." };
+      },
+      async replyToFeedback({ targetKey, threadId, body }: { targetKey: string; threadId: string; body: string }) {
+        const review = store.getReview(targetKey);
+        const thread = store.listFeedbackThreads(targetKey).find((t) => t.id === threadId);
+        if (!review?.repo || !review.number || !thread) return { ok: false, error: "That thread isn't part of this review anymore. Refresh and try again." };
+        const r = await runGh(ghReplyThreadArgs(review.repo, review.number, thread.commentId), { stdin: JSON.stringify({ body }) });
+        if (r.code !== 0) return { ok: false, error: ghErrorMessage(r) };
+        store.deleteReplyDraft(targetKey, threadId);
+        await refreshThreads(review).catch(() => {});
+        return { ok: true, feedback: view(targetKey) };
+      },
+      saveReplyDraft({ targetKey, threadId, body }: { targetKey: string; threadId: string; body: string }) {
+        if (body.trim()) store.setReplyDraft(targetKey, threadId, body, "reviewer");
+        else store.deleteReplyDraft(targetKey, threadId);
+        return { ok: true };
+      },
+      discardReplyDraft({ targetKey, threadId }: { targetKey: string; threadId: string }) {
+        store.deleteReplyDraft(targetKey, threadId);
+        bb.realtime.publish(`feedback:${targetKey}`, { ts: Date.now() });
+        return { ok: true };
+      },
+      useSuggestedVerdict({ targetKey, revision, mode }: { targetKey: string; revision?: string; mode: "suggested" | "remaining" }) {
+        try { requireReviewRevision(store, targetKey, revision); } catch (error) { return { ok: false, error: (error as Error).message }; }
+        const feedback = view(targetKey);
+        if (!feedback) return { ok: false, error: "This review no longer exists." };
+        let verdict: "APPROVE" | "REQUEST_CHANGES" | "COMMENT";
+        let body: string;
+        if (mode === "suggested") {
+          if (!feedback.run) return { ok: false, error: "The assistant hasn't suggested a verdict yet." };
+          verdict = feedback.run.suggestedVerdict ?? "COMMENT";
+          body = feedback.run.suggestedBody;
+        } else {
+          body = remainingBody(feedback);
+          if (!body) return { ok: false, error: "Nothing is left open. Consider approving." };
+          verdict = "REQUEST_CHANGES";
+        }
+        const draft = store.setVerdict(targetKey, verdict, body);
+        bb.realtime.publish(`draft-summary:${targetKey}`, { ts: Date.now() });
+        return { ok: true, draft };
+      },
+      async getSinceReview({ targetKey }: { targetKey: string }) {
+        const review = store.getReview(targetKey);
+        if (!review) return { baseline: null, files: [] };
+        try {
+          const since = await sinceReview(store, runGh, review);
+          return since ? { baseline: since.baseline, files: since.files } : { baseline: null, files: [] };
+        } catch (error) {
+          return { baseline: null, files: [], error: error instanceof Error ? error.message : "Couldn't compare with your last review." };
+        }
+      },
+    };
+  }
+
   // The draft, its comments drafted against an older diff (which submitting refuses), and the discussions at its lines.
   const draftState = (targetKey: string, draft = store.getDraft(targetKey)) => ({
     draft,
@@ -102,7 +237,7 @@ export default async function plugin(bb: BbPluginApi) {
       return { githubCli: cli.code === 0, account: user.code === 0 ? user.stdout.trim() || null : null, agentAvailable: providers ? providers.some(p => p.available) : null, projectAvailable: projects ? projects.length > 0 : null };
     },
     getReviewBundle({ targetKey }) {
-      return { review: JSON.parse(JSON.stringify(store.getReview(targetKey))), guide: store.getGuide(targetKey),
+      return { review: decorate(store.getReview(targetKey)), guide: store.getGuide(targetKey),
         patch: store.readPatch(targetKey, 0, store.readPatch(targetKey, 0, 0).total).text, revision: reviewRevision(store, targetKey) };
     },
     getPreferences() { return store.getPreferences(); },
@@ -154,14 +289,14 @@ export default async function plugin(bb: BbPluginApi) {
       // ReviewMeta rows carry optional fields as literal `undefined` own
       // properties (store.ts's rowToMeta), which the rpc layer's strict JSON
       // output check rejects; round-trip through JSON to drop them.
-      return { reviews: JSON.parse(JSON.stringify(store.listReviews())) };
+      return { reviews: store.listReviews().map(decorate) };
     },
     async refreshReviews() {
       await sync.all(true);
-      return { reviews: JSON.parse(JSON.stringify(store.listReviews())) };
+      return { reviews: store.listReviews().map(decorate) };
     },
     getReview({ targetKey }) {
-      return { review: JSON.parse(JSON.stringify(store.getReview(targetKey))) };
+      return { review: decorate(store.getReview(targetKey)) };
     },
     getGuide({ targetKey }) {
       return { guide: store.getGuide(targetKey), status: store.getReview(targetKey)?.status ?? "error" };
@@ -247,6 +382,9 @@ export default async function plugin(bb: BbPluginApi) {
       if (await isAssistantAnswering(bb, store, targetKey)) return { ok: false, error: "Wait for the assistant to finish answering, then delete the review." };
       const threadIds = [store.getAssistantThread(targetKey), store.getAgentThread(targetKey)];
       store.deleteReview(targetKey);
+      // Discovery won't add a PR you deleted back to the list; starting it again does.
+      if (review.kind === "pr") store.ignoreDiscovery(targetKey);
+      await notifications.dismiss(targetKey).catch(() => {});
       bb.realtime.publish(`review:${targetKey}`, { ts: Date.now() });
       bb.realtime.publish("reviews", { ts: Date.now() });
       await notifications.forget(targetKey).catch(() => {});
@@ -292,7 +430,15 @@ export default async function plugin(bb: BbPluginApi) {
       try { requireReviewRevision(store, targetKey, revision); } catch (error) { return { ok: false, error: (error as Error).message }; }
       const result = await submitReview(targetKey, revision, account, comments);
       // The discussions were about this draft. The assistant's conversation keeps them.
-      if (result.ok) store.clearDiscussions(targetKey);
+      if (result.ok) {
+        store.clearDiscussions(targetKey);
+        const review = store.getReview(targetKey)!;
+        // The diff you reviewed is what "since your review" compares against.
+        if (review.headSha) store.saveSnapshot(targetKey, review.headSha, store.readPatch(targetKey, 0, store.readPatch(targetKey, 0, 0).total).text);
+        pruneDiffs(store, review);
+        await notifications.dismiss(targetKey).catch(() => {});
+        await sync.evaluate(targetKey);
+      }
       bb.realtime.publish(`review:${targetKey}`, { ts: Date.now() });
       bb.realtime.publish("reviews", { ts: Date.now() });
       return result;
@@ -342,7 +488,7 @@ export default async function plugin(bb: BbPluginApi) {
       const repo = store.getReview(targetKey)?.repo ?? null;
       return checkRepoAccess(runGh, repo);
     },
-    ...pendingHandlers(),
+    ...turnHandlers(),
   };
   const guarded = Object.fromEntries(Object.entries(handlers).map(([name, handler]) =>
     [name, (input: unknown) => updates.run(() => (handler as (input: unknown) => unknown)(input))])) as unknown as typeof handlers;
@@ -429,10 +575,111 @@ export default async function plugin(bb: BbPluginApi) {
     parameters: z.object({ ...location, body: z.string().trim().min(1).describe("The reply, in Markdown.") }),
     execute: (input, { threadId }) => assistantDraft(threadId, true, (targetKey) => replyInDiscussion(store, targetKey, input)),
   });
+  // Checking your feedback: the review assistant reads it and what changed, then records a verdict per item.
+  async function assistantReviewOf(threadId: string): Promise<ReviewMeta | string> {
+    const targetKey = assistantReview(store, threadId);
+    const review = targetKey ? store.getReview(targetKey) : null;
+    if (!review) return "This conversation is no longer a review's assistant.";
+    if (review.kind !== "pr") return "This is a local review; there's no GitHub feedback to check.";
+    return review;
+  }
+  const failed = (text: string): PluginAgentToolResult => ({ content: [{ type: "text", text }], isError: true });
+  bb.agents.registerTool({
+    name: "list_feedback",
+    description: "List the reviewer's feedback on this PR: each review thread they started (id, location, their comment, replies, resolved/outdated state, any earlier verdict) and their review summaries.",
+    instructions: "When a review comes back to the reviewer, check whether each piece of their feedback was properly addressed: list_feedback, then read_changes_since_review, then read_file where you need context. Judge the fix itself, not just whether the lines changed: a renamed variable doesn't fix a race. Record every thread, and each distinct ask in the summaries as \"summary:<n>\" with a title, with assess_feedback: addressed, partial, not_addressed, disputed (the author argues against it; say why in the evidence), or unclear. Then suggest a verdict with a short summary the reviewer could submit. Draft a reply on each thread with draft_thread_reply when one helps, such as \"Fixed in abc123, thanks.\" or what's still missing. The reviewer posts replies and resolves threads; you never do.",
+    parameters: z.object({}),
+    async execute(_input, { threadId }) {
+      const review = await assistantReviewOf(threadId);
+      if (typeof review === "string") return failed(review);
+      await refreshThreads(review).catch(() => {});
+      return describeFeedback(store, store.getReview(review.targetKey)!);
+    },
+  });
+  bb.agents.registerTool({
+    name: "read_changes_since_review",
+    description: "What changed in this PR since the reviewer's last review: the PR's diff then compared with its diff now, file by file (rebases and base-branch merges don't show), plus the commits since. Pass file for one file.",
+    parameters: z.object({ file: z.string().optional().describe("Repo-relative path, as the diff shows it.") }),
+    async execute({ file }, { threadId }) {
+      const targetKey = assistantReview(store, threadId) ?? (await generationReview(threadId));
+      const review = targetKey ? store.getReview(targetKey) : null;
+      if (!review || review.kind !== "pr") return failed("There's no PR review to compare.");
+      try { return await changesSinceReview(store, runGh, review, file); }
+      catch (error) { return failed(error instanceof Error ? error.message : "Couldn't compare with the reviewer's last review."); }
+    },
+  });
+  bb.agents.registerTool({
+    name: "read_file",
+    description: "Read a file of this PR at the PR's head (ref \"current\") or at the commit the reviewer last reviewed (ref \"reviewed\"), with line numbers. Returns up to 400 lines from startLine.",
+    parameters: z.object({
+      path: z.string().min(1).describe("Repo-relative path."),
+      ref: z.enum(["current", "reviewed"]).optional(),
+      startLine: z.number().int().min(1).optional(),
+      endLine: z.number().int().min(1).optional(),
+    }),
+    async execute({ path, ref, startLine, endLine }, { threadId }) {
+      const review = await assistantReviewOf(threadId);
+      if (typeof review === "string") return failed(review);
+      return readFileAt(runGh, review, path, ref ?? "current", startLine, endLine);
+    },
+  });
+  bb.agents.registerTool({
+    name: "assess_feedback",
+    description: "Record whether each piece of the reviewer's feedback was addressed at the PR's current head. Items are thread ids from list_feedback, or \"summary:<n>\" (with a title) for asks in a review summary. Optionally add an overall summary and the verdict you'd suggest. The reviewer sees it in the Feedback view; nothing reaches GitHub.",
+    parameters: z.object({
+      items: z.array(z.object({
+        id: z.string().min(1),
+        verdict: z.enum(["addressed", "partial", "not_addressed", "disputed", "unclear"]),
+        evidence: z.string().trim().min(1).describe("One line: what changed, or what's missing."),
+        title: z.string().optional().describe("For a summary ask: the ask, briefly."),
+        file: z.string().optional().describe("Where the evidence is, in the current diff."),
+        line: z.number().int().min(1).optional(),
+      })).min(1),
+      summary: z.string().optional().describe("Two or three sentences on where the PR stands."),
+      suggestedVerdict: z.enum(["APPROVE", "REQUEST_CHANGES", "COMMENT"]).optional(),
+      suggestedBody: z.string().optional().describe("The review summary you'd submit with that verdict, in GitHub Markdown."),
+    }),
+    async execute(input, { threadId }) {
+      const review = await assistantReviewOf(threadId);
+      if (typeof review === "string") return failed(review);
+      const result = assess(store, review, input);
+      if (!result.ok) return failed(result.error);
+      bb.realtime.publish(`feedback:${review.targetKey}`, { ts: Date.now() });
+      await sync.evaluate(review.targetKey);
+      changed(review.targetKey);
+      return result.text;
+    },
+  });
+  bb.agents.registerTool({
+    name: "draft_thread_reply",
+    description: "Draft a reply on one of the reviewer's review threads. It waits in the Feedback view; only the reviewer sends it to GitHub.",
+    parameters: z.object({ threadId: z.string().min(1).describe("The thread id from list_feedback."), body: z.string().trim().min(1).describe("The reply, in GitHub Markdown.") }),
+    async execute({ threadId: thread, body }, { threadId }) {
+      const review = await assistantReviewOf(threadId);
+      if (typeof review === "string") return failed(review);
+      if (!store.listFeedbackThreads(review.targetKey).some((t) => t.id === thread)) return failed(`There's no thread ${thread} from the reviewer. Use an id from list_feedback.`);
+      store.setReplyDraft(review.targetKey, thread, body, "agent");
+      bb.realtime.publish(`feedback:${review.targetKey}`, { ts: Date.now() });
+      return "Drafted. The reviewer can edit and send it from the Feedback view.";
+    },
+  });
+  /** The review a guide-writing worker is generating, from its title. */
+  async function generationReview(threadId: string): Promise<string | null> {
+    const title = await bb.sdk.threads.get({ threadId }).then((thread) => thread.title ?? "", () => "");
+    return title.startsWith("Generate guide: ") ? title.slice("Generate guide: ".length) : null;
+  }
+
   // A discussion the assistant didn't answer by the end of its turn stops waiting for it.
   const settle = async ({ thread }: { thread: { id: string } }) => {
     const targetKey = await settleDiscussions(bb, store, thread.id);
     if (targetKey) bb.realtime.publish(`draft:${targetKey}`, {});
+    // A feedback check ends with the assistant's turn; an alert waiting for it can go now.
+    const checked = assistantReview(store, thread.id);
+    if (checked && store.getReview(checked)?.verifyingSince) {
+      store.setLifecycle(checked, { verifyingSince: null, preparedAt: Date.now() });
+      await sync.evaluate(checked);
+      bb.realtime.publish(`feedback:${checked}`, { ts: Date.now() });
+    }
   };
   bb.events.on("thread.idle", settle);
   bb.events.on("thread.failed", settle);
@@ -468,7 +715,7 @@ export default async function plugin(bb: BbPluginApi) {
     if (context.origin?.pluginId !== bb.pluginId) return { tools: [], skills: [] };
     const title = context.thread?.title ?? "";
     if (title.startsWith("Generate guide:")) {
-      return { tools: ["read_review_patch", "generate_review_guide"], skills: ["guided-review-generate"] };
+      return { tools: ["read_review_patch", "read_changes_since_review", "generate_review_guide"], skills: ["guided-review-generate"] };
     }
     // The review assistant can read any file's diff on demand, so the chat
     // works across the whole review, and change its own review's local draft
@@ -478,7 +725,8 @@ export default async function plugin(bb: BbPluginApi) {
       const { targetKey } = context.pluginMetadata;
       const review = typeof targetKey === "string" ? store.getReview(targetKey) : null;
       return {
-        tools: ["read_review_patch", "list_draft_comments", "add_draft_comment", "edit_draft_comment", "delete_draft_comment", "reply_in_discussion"], skills: [],
+        tools: ["read_review_patch", "list_draft_comments", "add_draft_comment", "edit_draft_comment", "delete_draft_comment", "reply_in_discussion",
+          "list_feedback", "read_changes_since_review", "read_file", "assess_feedback", "draft_thread_reply"], skills: [],
         ...(review ? { instructions: assistantInstructions(review.targetKey, store.getGuide(review.targetKey), store.getPreferences().preferences) } : {}),
       };
     }

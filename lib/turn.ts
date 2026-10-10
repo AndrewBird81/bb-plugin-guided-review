@@ -141,7 +141,9 @@ function after(t: number | null | undefined, ...floors: Array<number | null | un
 export function computeTurn(review: TurnInput, options: TurnOptions = defaultTurnOptions, now = Date.now()): Turn {
   const s = review.signals ?? {};
   const head = review.latestHeadSha ?? review.headSha;
-  const reviewedSha = s.lastReviewSha ?? review.submittedHeadSha ?? null;
+  // A review submitted here counts until GitHub reports it.
+  const local = (review.submittedAt ?? 0) > (s.lastReviewAt ?? 0);
+  const reviewedSha = (local ? review.submittedHeadSha : s.lastReviewSha ?? review.submittedHeadSha) ?? null;
   const updated = !!(head && reviewedSha && head !== reviewedSha);
   const base = { signal: null, at: null, notify: false, blocking: false, updated };
   const make = (group: TurnGroup, reason: TurnReason, label: string, action: string, extra: Partial<Turn> = {}): Turn =>

@@ -13,6 +13,8 @@ export const GuideSchema = z.object({
   intent: z.string().min(1),
   sections: z.array(SectionSchema),
   unplacedFiles: z.array(z.string()),
+  /** What changed since the reviewer's last review, on a re-review. */
+  sinceReview: z.string().optional(),
   review: z.object({ gitRef: z.string().min(1), base: z.string().optional() }).optional(),
   source: z.unknown().optional(),
   generator: z.unknown().optional(),

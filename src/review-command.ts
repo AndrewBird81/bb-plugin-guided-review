@@ -104,6 +104,7 @@ export async function runReviewCommand(deps: Deps, argv: string[], ctx: Ctx) {
 
   deps.store.saveReview(meta);
   deps.store.savePatch(key, ensureGitHeaders(patch));
+  deps.store.unignoreDiscovery(key);
 
   if (context !== undefined) deps.store.setReviewContext(key, context.trim() || null);
 

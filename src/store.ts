@@ -28,6 +28,16 @@ export interface ReviewLifecycle {
   notifiedSignal?: string | null;
   /** The head commit the automatic re-review or check last ran for. */
   autoRunHead?: string | null;
+  /** The group the review was last in, so leaving Needs review clears its alert. */
+  turnGroup?: "needs" | "waiting" | "reviewed" | "archive" | null;
+  /** An alert waiting for its re-review to be prepared. */
+  pendingAlert?: { signal: string; since: number } | null;
+  /** The assistant is checking your feedback, since this time. */
+  verifyingSince?: number | null;
+  /** When the automatic re-review or check last finished. */
+  preparedAt?: number | null;
+  /** Your latest review summaries, newest last, for the assistant. */
+  reviewBodies?: Array<{ state: string; at: number; body: string }>;
 }
 
 export interface ReviewMeta extends ReviewLifecycle {

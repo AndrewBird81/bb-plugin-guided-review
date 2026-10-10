@@ -60,6 +60,8 @@ export async function createPrReview(
     createdAt: now,
   });
   deps.store.savePatch(key, ensureGitHeaders(patch));
+  // Starting a PR again brings it back into discovery after a delete.
+  deps.store.unignoreDiscovery(key);
 
   // Fire-and-forget generation; the panel refetches on the realtime signal.
   void generateGuide(deps.bb, deps.store, key, args.projectId);

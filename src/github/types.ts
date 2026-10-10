@@ -50,6 +50,8 @@ export interface PrFacts {
   otherOpinions: Array<{ login: string; state: "APPROVED" | "CHANGES_REQUESTED" }>;
   /** Review requests for the viewer from the timeline, oldest first. */
   requests: ReviewRequestEvent[];
+  /** The latest removal of a review request for the viewer, or a team the viewer is on. */
+  requestRemovedAt: number | null;
   /** A request for the viewer, or a team the viewer is on, is pending now. */
   requestPending: { via: "user" | "team"; team?: string } | null;
   readyAt: number | null;

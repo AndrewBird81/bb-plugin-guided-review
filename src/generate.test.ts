@@ -138,7 +138,7 @@ test("agents.configure exposes tools/skill only to this plugin's own generation 
   const mine = await h.harness.behavior.resolveAgentConfiguration(
     baseConfigContext("guided-review", "Generate guide: pr-1"),
   );
-  expect(mine.tools.map((t) => t.name)).toEqual(["read_review_patch", "generate_review_guide"]);
+  expect(mine.tools.map((t) => t.name)).toEqual(["read_review_patch", "read_changes_since_review", "generate_review_guide"]);
   expect(mine.skills).toEqual(["guided-review-generate"]);
 
   const foreign = await h.harness.behavior.resolveAgentConfiguration(
@@ -159,7 +159,8 @@ test("agents.configure exposes tools/skill only to this plugin's own generation 
   const agentThread = await h.harness.behavior.resolveAgentConfiguration(
     baseConfigContext("guided-review", "Review agent: pr-1"),
   );
-  expect(agentThread.tools.map((t) => t.name)).toEqual(["read_review_patch", "list_draft_comments", "add_draft_comment", "edit_draft_comment", "delete_draft_comment", "reply_in_discussion"]);
+  expect(agentThread.tools.map((t) => t.name)).toEqual(["read_review_patch", "list_draft_comments", "add_draft_comment", "edit_draft_comment", "delete_draft_comment", "reply_in_discussion",
+    "list_feedback", "read_changes_since_review", "read_file", "assess_feedback", "draft_thread_reply"]);
   expect(agentThread.skills).toEqual([]);
 
   // An unrelated same-plugin thread still gets nothing.

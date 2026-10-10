@@ -28,7 +28,8 @@ export function factsUpdate(previous: ReviewMeta, facts: PrFacts, viewer: string
     }
   }
   const verdict = "submittedVerdict" in update ? update.submittedVerdict : previous.submittedVerdict;
-  const request = facts.requests.at(-1);
+  // A request the author withdrew doesn't count.
+  const request = facts.requests.filter((r) => !(facts.requestRemovedAt && facts.requestRemovedAt > r.at)).at(-1);
   const others = facts.otherOpinions;
   const reviewedAt = own?.sha ? facts.commits.lastIndexOf(own.sha) : -1;
   update.signals = {
@@ -49,6 +50,8 @@ export function factsUpdate(previous: ReviewMeta, facts: PrFacts, viewer: string
     commitsSince: reviewedAt >= 0 ? facts.commits.length - 1 - reviewedAt : null,
     author: facts.author,
   };
+  update.reviewBodies = facts.myReviews.filter((r) => r.body.trim()).slice(-3)
+    .map((r) => ({ state: r.state, at: r.submittedAt, body: r.body.slice(0, 4000) }));
   return update;
 }
 

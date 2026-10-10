@@ -136,6 +136,7 @@ function normalize(pr: any, ref: PrRef, viewer: string, teams: ReadonlySet<strin
     ci: CI[pr.head?.nodes?.[0]?.commit?.statusCheckRollup?.state] ?? "none",
     reviewDecision: pr.reviewDecision ?? null,
     myReviews, otherOpinions, requests, requestPending,
+    requestRemovedAt: at("ReviewRequestRemovedEvent", (e) => !!via(e.requestedReviewer, viewer, teams)),
     readyAt: at("ReadyForReviewEvent"),
     draftAt: at("ConvertToDraftEvent"),
     dismissedAt: at("ReviewDismissedEvent", (e) => same(e.review?.author?.login, viewer)),

@@ -4,6 +4,13 @@ import { completionNotifications } from "./completion-notifications";
 import { defaultPreferences, guidePreferencesPrompt, spawnExecution, type ReviewPreferences } from "./preferences";
 import { refreshAssistants, startAutomaticReview } from "./agent";
 import { agentPlacement, machineUnavailable } from "./machines";
+import { startVerification } from "./verification";
+import { baselineOf } from "./feedback-view";
+import type { Guide } from "./guide";
+
+const preparedListeners = new WeakMap<BbPluginApi, (targetKey: string) => void>();
+/** Told when a guide's automatic follow-up (the review or the feedback check) has started or can't. */
+export function onPrepared(bb: BbPluginApi, listener: (targetKey: string) => void) { preparedListeners.set(bb, listener); }
 
 const active = new WeakMap<BbPluginApi, Set<AbortController>>();
 export function hasGuideGenerations(bb: BbPluginApi) { return (active.get(bb)?.size ?? 0) > 0; }
@@ -16,22 +23,27 @@ export function guideWriterUnavailable(bb: BbPluginApi, store: Store): Promise<s
   return machineUnavailable(bb, store.getPreferences().preferences.guideAgent, "guide writer");
 }
 
-export function buildGenerationPrompt(targetKey: string, generationId?: string, preferences: ReviewPreferences = defaultPreferences): string {
+export function buildGenerationPrompt(targetKey: string, generationId?: string, preferences: ReviewPreferences = defaultPreferences, earlier?: { guide: Guide | null; reviewed: boolean }): string {
+  const chapters = earlier?.guide?.sections.map((s) => `- ${s.id}: ${s.title} (${s.diffs.map((d) => d.file).join(", ")})`) ?? [];
   return [
     "Author a Guided Review for this change.",
     "Follow the guided-review-generate skill exactly.",
     `The target key is: ${targetKey}`,
     ...(generationId ? [`Pass generationId "${generationId}" to generate_review_guide. It identifies this exact generation run.`] : []),
     "Start by calling read_review_patch, then submit with generate_review_guide.",
+    ...(chapters.length ? ["A guide exists for an earlier revision of this change. Keep its chapter ids, titles, and order where the files still fit, so the reviewer's map of the change stays stable:", ...chapters] : []),
+    ...(earlier?.reviewed ? ["The reviewer reviewed an earlier revision. Call read_changes_since_review, then summarize what changed since their review in the guide's sinceReview field, in 2–4 sentences."] : []),
     guidePreferencesPrompt(preferences),
   ].join("\n");
 }
 
+/** `notify: false` leaves the Needs You alert to the turn that started this re-review. */
 export async function generateGuide(
   bb: BbPluginApi,
   store: Store,
   targetKey: string,
   projectId: string,
+  options: { notify?: boolean } = {},
 ): Promise<void> {
   let generationId: string | undefined;
   let workerId: string | undefined;
@@ -41,12 +53,14 @@ export async function generateGuide(
   active.set(bb, runs);
   runs.add(controller);
   try {
+    const review = store.getReview(targetKey);
+    const earlier = { guide: store.getGuide(targetKey), reviewed: !!(review && baselineOf(review).at) };
     generationId = store.beginGeneration(targetKey);
     threads = bb.sdk.threads;
     const preferences = store.getPreferences().preferences;
     const worker = await threads.spawn({
       ...(await agentPlacement(bb, preferences.guideAgent, projectId)),
-      prompt: buildGenerationPrompt(targetKey, generationId, preferences),
+      prompt: buildGenerationPrompt(targetKey, generationId, preferences, earlier),
       title: `Generate guide: ${targetKey}`,
       visibility: "hidden",
       ...spawnExecution(preferences.guideAgent),
@@ -71,10 +85,15 @@ export async function generateGuide(
     if (ok) void refreshAssistants(bb, store, [targetKey]);
     bb.realtime.publish(`review:${targetKey}`, { status: ok ? "ready" : "error" });
     bb.realtime.publish("reviews", { ts: Date.now() });
-    if (ok) await startAutomaticReview(bb, store, targetKey).catch((error) => {
+    // A review you already reviewed gets its feedback checked; a new one, the automatic review.
+    const review = store.getReview(targetKey);
+    const checking = ok && !!review && !!baselineOf(review).at && await startVerification(bb, store, targetKey, "the guide was rebuilt for the PR's new commits");
+    if (ok && !checking && !(review && baselineOf(review).at)) await startAutomaticReview(bb, store, targetKey).catch((error) => {
       bb.log.warn(`The automatic review of ${targetKey} didn't start: ${String(error)}`);
     });
-    if (!controller.signal.aborted) await completionNotifications(bb, store).queue({
+    if (!checking) store.setLifecycle(targetKey, { preparedAt: Date.now() });
+    preparedListeners.get(bb)?.(targetKey);
+    if (!controller.signal.aborted && options.notify !== false) await completionNotifications(bb, store).queue({
       targetKey, generationId, projectId, status: ok ? "ready" : "error",
     });
   } catch {
