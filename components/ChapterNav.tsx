@@ -52,6 +52,7 @@ export const ChapterNav = memo(function ChapterNav({
   views,
   onSelectFile,
   currentFile,
+  changedSince,
 }: {
   sections: Section[];
   activeId: string;
@@ -60,6 +61,8 @@ export const ChapterNav = memo(function ChapterNav({
   onSelectFile: (chapterId: string, file: string) => void;
   /** The file nearest the top of the diff, marked in the open chapter's list. */
   currentFile?: string;
+  /** Per chapter id, how many of its files changed since your review. */
+  changedSince?: Record<string, number>;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const isExpanded = (id: string) => expanded[id] ?? id === activeId;
@@ -82,6 +85,7 @@ export const ChapterNav = memo(function ChapterNav({
           const skippable = s.diffs.filter((d) => classifyFile(d.file).skippable).length;
           const allSkippable = s.diffs.length > 0 && skippable === s.diffs.length;
           const viewed = s.diffs.filter((d) => views.get(d.file)?.viewed).length;
+          const changed = changedSince?.[s.id] ?? 0;
           return (
             <li key={s.id} className="relative">
               {index < sections.length - 1 && <span aria-hidden className="absolute bottom-[-6px] left-[18px] top-7 w-px bg-border" />}
@@ -109,6 +113,11 @@ export const ChapterNav = memo(function ChapterNav({
                       <span className="tabular-nums">
                         {viewed > 0 ? `${viewed}/` : ""}{s.diffs.length} file{s.diffs.length === 1 ? "" : "s"}{viewed > 0 ? " viewed" : ""}
                       </span>
+                      {changed > 0 && (
+                        <Badge tone="primary" size="sm" title={`${changed} file${changed === 1 ? "" : "s"} changed since your review`}>
+                          {changed} changed
+                        </Badge>
+                      )}
                       {skippable > 0 && <span>· {skippable} skippable</span>}
                       {allSkippable && <span className="italic">· mostly tests — skim</span>}
                     </div>

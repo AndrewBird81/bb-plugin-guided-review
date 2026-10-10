@@ -5,7 +5,7 @@
 
 export interface ReviewUiState {
   activeId?: string;
-  view?: "diff" | "threads";
+  view?: "diff" | "feedback" | "threads";
   scrollTop?: number;
   sidebarWidth?: number;
   focus?: boolean;

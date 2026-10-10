@@ -3,7 +3,7 @@ import * as Tooltip from "@radix-ui/react-tooltip";
 import { useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
-import { reviewState, type ReviewItem } from "../lib/review-state";
+import type { ReviewItem } from "../lib/review-state";
 import { sameLocation, type CommentLocation, type Discussion, type Draft, type DraftComment, type Verdict } from "../src/draft";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -27,9 +27,13 @@ import { withLineBreaks } from "../src/line-breaks";
  */
 export interface CommentPrefill { file: string; line: number; side: "LEFT" | "RIGHT"; startLine?: number; ask?: boolean; nonce: number; }
 
-export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, activeFiles, prefill, isLocal = false, review, onSubmitted, onShowComment, agent, reviewRevision, account, children }: {
+const RECEIPT_LABEL: Record<Verdict, string> = { APPROVE: "Approved", REQUEST_CHANGES: "Changes requested", COMMENT: "Commented" };
+
+export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, activeFiles, prefill, isLocal = false, review, onSubmitted, onShowComment, agent, reviewRevision, account, showDraft, children }: {
   targetKey: string; activeChapterId: string; activeFiles: string[]; prefill?: CommentPrefill; isLocal?: boolean; review?: ReviewItem; onSubmitted?: () => void; onShowComment?: (at: CommentLocation) => void;
   reviewRevision?: string; account?: string;
+  /** A new value opens Draft comments and its summary, after something else changed the draft. */
+  showDraft?: number;
   agent?: Omit<AgentDockProps, "targetKey" | "active" | "onDock" | "onCollapse">;
   /** The diff, which shows the draft's comments under their lines. */
   children?: ReactNode;
@@ -168,6 +172,23 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
     void enqueue(() => rpc.call("getDraft", { targetKey })).then(updateComments).catch(() => {});
   }, [enqueue, rpc, targetKey]);
   useRealtime(`draft:${targetKey}`, refreshComments);
+  // The verdict and summary changed elsewhere, such as the assistant's suggestion; unsaved edits win.
+  const reloadSummary = useCallback(() => {
+    if (summary.current.dirty || pending.current) return;
+    void enqueue(() => rpc.call("getDraft", { targetKey })).then((result) => {
+      updateComments(result);
+      if (!mounted.current || summary.current.dirty) return;
+      const next = result.draft as Draft;
+      summary.current = { ...summary.current, verdict: next.verdict, body: next.body };
+      setDraft((previous) => ({ ...previous, verdict: next.verdict, body: next.body }));
+    }).catch(() => {});
+  }, [enqueue, rpc, targetKey]);
+  useRealtime(`draft-summary:${targetKey}`, reloadSummary);
+  useEffect(() => {
+    if (!showDraft) return;
+    setTab("draft"); setToolsOpen(true); setShowNotes(true);
+    reloadSummary();
+  }, [showDraft, reloadSummary]);
 
   useEffect(() => { if (!showComposer && !body.trim()) setFile(activeFiles[0] ?? ""); }, [activeFiles, showComposer, body]);
   /**
@@ -328,7 +349,7 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
           {(draft.comments.length > 0 || draft.body) && <details className="text-sm"><summary className="cursor-pointer">Unsubmitted draft</summary><p className="mt-2 whitespace-pre-wrap">{draft.body}</p>{draft.comments.map((comment, index) => <p key={index} className="mt-2 break-words">{comment.file}:{comment.line} — {comment.body}</p>)}</details>}
         </section> : completed ?
         <section aria-label="Submitted review" className="m-3 space-y-3 rounded-lg border border-success/25 bg-success/10 p-3">
-          <p className="flex items-center gap-2 text-sm font-medium text-diff-added"><Icon name="BadgeCheck" className="size-5" aria-hidden />{reviewState({ targetKey, ...review, submittedVerdict }).label}</p>
+          <p className="flex items-center gap-2 text-sm font-medium text-diff-added"><Icon name="BadgeCheck" className="size-5" aria-hidden />{RECEIPT_LABEL[submittedVerdict]}</p>
           <p className="text-xs text-muted-foreground">Review submitted to GitHub</p>
           <Button variant="outline" size="sm" onClick={() => setWriteAnother(true)}>Add another review</Button>
         </section> : <section aria-label="Review draft" className="flex flex-col">

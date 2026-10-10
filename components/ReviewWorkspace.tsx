@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import type { SelectedLineRange } from "@pierre/diffs";
 import type { rpcContract } from "../src/rpc-contract";
 import type { CommentLocation } from "../src/draft";
+import type { FileInterdiff } from "../src/interdiff";
+import { computeTurn, type TurnReason } from "../lib/turn";
 import { cn } from "../lib/utils";
 import { experimental_useCodeTheme } from "@get-bb/plugin-sdk/app";
 import { useMediaQuery } from "./ui/hooks/use-media-query";
@@ -16,6 +18,8 @@ import { DiffViewer, type FileViewFlags } from "./DiffViewer";
 import { DraftTray, type CommentPrefill } from "./DraftTray";
 import { RereviewBanner } from "./RereviewBanner";
 import { ThreadsPanel } from "./ThreadsPanel";
+import { FeedbackPanel } from "./FeedbackPanel";
+import { TrackedReview } from "./TrackedReview";
 import type { DockInjection } from "./AgentDock";
 import { ReviewSkeleton, ReviewError } from "./ReviewSkeleton";
 import { kindLook } from "./ReviewStatus";
@@ -26,6 +30,17 @@ import { defaultPreferences } from "../lib/review-preferences";
 
 const SIDEBAR_MIN = 200;
 const SIDEBAR_MAX = 560;
+
+type View = "diff" | "feedback" | "threads";
+const VIEW_LOOK = { diff: { label: "Diff", icon: "FileDiff" }, feedback: { label: "Feedback", icon: "ChatFeedback" }, threads: { label: "Threads", icon: "MessageSquare" } } as const;
+
+/** Turns where what matters first is whether the author addressed your feedback. */
+const FEEDBACK_FIRST = new Set<TurnReason>(["re-requested", "handled", "looks-ready", "question", "mentioned"]);
+function opensOnFeedback(review: any): boolean {
+  if (review?.kind !== "pr") return false;
+  const turn = review.turn ?? computeTurn(review);
+  return turn.group === "needs" && FEEDBACK_FIRST.has(turn.reason);
+}
 
 export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { targetKey: string }) {
   const rpc = useRpc<typeof rpcContract>();
@@ -48,7 +63,9 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const [patch, setPatch] = useState("");
   const [checks, setChecks] = useState<{ bucket: string; checks: any[] } | null>(null);
   const [activeId, setActiveId] = useState("");
-  const [view, setView] = useState<"diff" | "threads">(persisted.view ?? "diff");
+  // The reviewer's choice persists; without one, the review's turn picks the first view once.
+  const [chosenView, setView] = useState<View | null>(persisted.view ?? null);
+  const [defaultView, setDefaultView] = useState<View | null>(null);
   const [revision, setRevision] = useState("");
   const [repoAccess, setRepoAccess] = useState<{ accessible: boolean; repo: string | null; account: string | null } | null>(null);
   const [views, setViews] = useState<Map<string, FileViewFlags>>(new Map());
@@ -57,6 +74,10 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const [sel, setSel] = useState<{ x: number; y: number; file: string; code: string } | null>(null);
   const [lineSel, setLineSel] = useState<{ file: string; range: SelectedLineRange } | null>(null);
   const [draftPrefill, setDraftPrefill] = useState<CommentPrefill | undefined>();
+  const [showDraft, setShowDraft] = useState<number | undefined>();
+  const [since, setSince] = useState<Map<string, FileInterdiff> | null>(null);
+  const [sinceOnly, setSinceOnly] = useState(false);
+  const [snoozing, setSnoozing] = useState(false);
   const [reveal, setReveal] = useState<{ at: CommentLocation; nonce: number }>();
 
   // Screen utilization: resizable/collapsible sidebar, focus mode, fullscreen.
@@ -75,12 +96,16 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
   useEffect(() => setLastReview(targetKey), [targetKey]);
+  // Opening the review clears its Needs You alert.
+  useEffect(() => { void rpc.call("markSeen", { targetKey }).catch(() => {}); }, [rpc, targetKey]);
   const loadPreferences = useCallback(() => {
     void rpc.call("getPreferences", null).then(({ preferences }) => setDiffLayout(preferences.diffLayout)).catch(() => {});
   }, [rpc]);
   useEffect(loadPreferences, [loadPreferences]);
   useRealtime("preferences", loadPreferences);
-  useEffect(() => patchReviewState(targetKey, { activeId, view, sidebarWidth, focus }), [targetKey, activeId, view, sidebarWidth, focus]);
+  useEffect(() => patchReviewState(targetKey, { activeId, view: chosenView ?? undefined, sidebarWidth, focus }), [targetKey, activeId, chosenView, sidebarWidth, focus]);
+  const isPr = review?.kind === "pr";
+  const view: View = chosenView === "feedback" && review && !isPr ? "diff" : chosenView ?? defaultView ?? "diff";
 
   const loadViews = useCallback(async () => {
     try {
@@ -111,6 +136,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
       setGeneratingReplacement(false);
       setRevision(revision);
       setReview(review);
+      if (review) setDefaultView((current) => current ?? (opensOnFeedback(review) ? "feedback" : "diff"));
       setGuide(guide);
       setPatch(patch);
       setChecks(checksRes);
@@ -132,6 +158,37 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     return () => { request.current++; resizeCleanup.current?.(); };
   }, [load]);
   useRealtime(`review:${targetKey}`, () => { void load(); });
+
+  // What changed since your last review, when the diff shown isn't the one you reviewed.
+  const baselineSha: string | null = review?.signals?.lastReviewSha ?? review?.submittedHeadSha ?? null;
+  const sinceKey = baselineSha && review?.headSha && baselineSha !== review.headSha ? `${baselineSha}..${review.headSha}` : null;
+  useEffect(() => {
+    setSince(null);
+    if (!sinceKey) return;
+    let cancelled = false;
+    rpc.call("getSinceReview", { targetKey }).then((result) => {
+      if (!cancelled && result.baseline && !result.error) setSince(new Map((result.files as FileInterdiff[]).map((file) => [file.file, file])));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [rpc, targetKey, sinceKey]);
+  const changedSince = useMemo(() => {
+    if (!since || !guide?.sections) return undefined;
+    return Object.fromEntries(guide.sections.map((section: any) => [section.id, section.diffs.filter((diff: any) => {
+      const status = since.get(diff.file)?.status;
+      return status === "changed" || status === "added";
+    }).length]));
+  }, [since, guide]);
+
+  const snooze = useCallback(async (snoozed: boolean) => {
+    setSnoozing(true);
+    try {
+      const result = await rpc.call("snoozeReview", { targetKey, snoozed });
+      if (!result.ok) toast.error(result.error ?? "Couldn’t update the review.");
+      else void load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Couldn’t update the review.");
+    } finally { setSnoozing(false); }
+  }, [rpc, targetKey, load]);
 
   async function rebuild() {
     if (rebuilding) return;
@@ -250,6 +307,15 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     setMobileChapters(false);
     setReveal({ at, nonce: Date.now() });
   }, [guide]);
+  // A line from the Feedback view: the whole diff, so the line is there. Without a line, the file.
+  const showLocation = useCallback((file: string, line: number | null, side: "LEFT" | "RIGHT") => {
+    setSinceOnly(false);
+    showComment({ file, line: line ?? 0, side });
+  }, [showComment]);
+  const followUp = useCallback((file: string, line: number | null, side: "LEFT" | "RIGHT") => {
+    showLocation(file, line, side);
+    if (line != null) setDraftPrefill({ file, line, side, nonce: Date.now() });
+  }, [showLocation]);
   // The diff remounts after Threads; it shouldn't jump back to an old comment.
   useEffect(() => { if (view !== "diff") setReveal(undefined); }, [view]);
 
@@ -364,6 +430,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     if (loadError) return <ReviewError title="Couldn’t load this review" message={loadError} onRetry={() => void load()} onBack={back} />;
     if (loading) return <ReviewSkeleton />;
     if (!review) return <ReviewError title="Review not found" message="This review may have been removed. Return to your reviews or refresh the connection." onRetry={() => void load()} onBack={back} />;
+    if (review.status === "tracked") return <TrackedReview review={review} onBack={back} />;
     if (review.status === "error") return <ReviewError onRetry={() => void rebuild()} onBack={back} busy={rebuilding} />;
     return <ReviewSkeleton />;
   }
@@ -394,7 +461,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
       ) : (
         <div className="border-b border-border">
           <div className="px-4 pb-3.5 pt-3">
-            <ReviewHeader review={review} checks={checks} intent={guide.intent} trailing={!review?.archivedAt && <RereviewBanner targetKey={targetKey} />} />
+            <ReviewHeader review={review} checks={checks} intent={guide.intent} onShowFeedback={isPr ? () => setView("feedback") : undefined} onSnooze={isPr ? (snoozed) => void snooze(snoozed) : undefined} snoozing={snoozing} trailing={!review?.archivedAt && <RereviewBanner targetKey={targetKey} />} />
           </div>
           {generatingReplacement && <p role="status" className="flex items-center gap-2 border-t border-warning/20 bg-warning/10 px-4 py-2 text-xs text-warning-text"><Icon name="Loading" className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />Regenerating the guide. Your previous diff and unsaved edits remain visible.</p>}
         </div>
@@ -414,7 +481,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
       )}
       <div className="flex min-h-0 flex-1 flex-col @min-[1024px]/review:flex-row">
       {/* The draft panel owns the draft and shares it with the diff, which shows each comment under its line. */}
-      <DraftTray reviewRevision={revision} account={repoAccess?.account ?? undefined} agent={{ patch, injection, container: rootEl }} review={review} onSubmitted={() => { void load(); }} onShowComment={showComment} isLocal={review?.kind === "ref"} targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} prefill={draftPrefill}>
+      <DraftTray reviewRevision={revision} account={repoAccess?.account ?? undefined} agent={{ patch, injection, container: rootEl }} review={review} onSubmitted={() => { void load(); }} onShowComment={showComment} isLocal={review?.kind === "ref"} targetKey={targetKey} activeChapterId={activeId} activeFiles={activeFiles} prefill={draftPrefill} showDraft={showDraft}>
       <div className="flex min-h-0 min-w-0 flex-1 flex-col md:flex-row">
         {(compact ? mobileChapters : !sidebarCollapsed) && (
           <>
@@ -429,6 +496,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                 views={views}
                 onSelectFile={onSelectFile}
                 currentFile={currentFile}
+                changedSince={changedSince}
               />
             </aside>
             {!compact && <div
@@ -463,7 +531,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
               {compact && "Chapters"}
             </Button>
             <div className="inline-flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5 ring-1 ring-inset ring-border">
-              {(["diff", "threads"] as const).map((value) => (
+              {(isPr ? (["diff", "feedback", "threads"] as const) : (["diff", "threads"] as const)).map((value) => (
                 <Button
                   key={value}
                   variant="ghost"
@@ -472,11 +540,23 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                   className="h-9 gap-1.5 rounded-md px-2.5 text-xs text-muted-foreground aria-pressed:shadow-xs md:h-7"
                   onClick={() => setView(value)}
                 >
-                  <Icon name={value === "diff" ? "FileDiff" : "MessageSquare"} className="size-3.5" aria-hidden />
-                  {value === "diff" ? "Diff" : "Threads"}
+                  <Icon name={VIEW_LOOK[value].icon} className="size-3.5" aria-hidden />
+                  {VIEW_LOOK[value].label}
                 </Button>
               ))}
             </div>
+            {view === "diff" && since && (
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-pressed={sinceOnly}
+                className="h-9 gap-1.5 px-2 text-xs text-muted-foreground aria-pressed:bg-primary/10 aria-pressed:text-primary aria-pressed:hover:bg-primary/15 md:h-7"
+                onClick={() => setSinceOnly((value) => !value)}
+              >
+                <Icon name="GitCommit" className="size-3.5" aria-hidden />
+                Since your review
+              </Button>
+            )}
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground md:ml-auto">
               {view === "diff" && activeFiles.length > 0 && (
                 <>
@@ -534,6 +614,17 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                 registerFileEl={registerFileEl}
                 onLineSelected={onLineSelected}
                 reveal={reveal}
+                since={since}
+                sinceOnly={sinceOnly}
+              />
+            ) : view === "feedback" ? (
+              <FeedbackPanel
+                targetKey={targetKey}
+                review={review}
+                revision={revision}
+                onShowLocation={showLocation}
+                onFollowUp={followUp}
+                onDraftUpdated={() => setShowDraft(Date.now())}
               />
             ) : (
               <ThreadsPanel targetKey={targetKey} />

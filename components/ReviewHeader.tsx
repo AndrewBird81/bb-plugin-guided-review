@@ -1,6 +1,7 @@
 import { memo, useState, type ReactNode } from "react";
 import { Markdown, UrlLink } from "@get-bb/plugin-sdk/app";
 import { reviewState } from "../lib/review-state";
+import { computeTurn, type ReviewRound, type Turn } from "../lib/turn";
 import { cn } from "../lib/utils";
 import { Icon } from "./ui/icon";
 import { Badge } from "./ui/badge";
@@ -8,6 +9,8 @@ import { Avatar } from "./ui/avatar";
 import { StatusBadge, kindLook } from "./ReviewStatus";
 import { IconTile } from "./ui/icon-tile";
 import { InlineCode } from "./ui/inline-code";
+import { Button } from "./ui/button";
+import { timeAgo } from "./time-ago";
 
 type ChecksSummary = { bucket: string; checks: any[] } | null | undefined;
 
@@ -44,23 +47,51 @@ export function ReviewTitleLink({ url, children }: { url?: string; children: Rea
 
 const INTENT_TOGGLE_THRESHOLD = 160;
 
+const ROUND_LABEL: Record<ReviewRound["state"], string> = { APPROVED: "Approved", CHANGES_REQUESTED: "Changes requested", COMMENTED: "Commented", DISMISSED: "Dismissed" };
+
+/** Your latest reviews on the PR, oldest first: "Changes requested 3d ago → Commented 1d ago". */
+function RoundTimeline({ rounds }: { rounds: ReviewRound[] }) {
+  return (
+    <ol aria-label="Your reviews" className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-1">
+      {rounds.slice(-4).map((round, index) => (
+        <li key={`${round.at}:${index}`} className="inline-flex items-center gap-1.5">
+          {index > 0 && <span aria-hidden className="text-subtle-foreground">→</span>}
+          <span><span className="text-foreground/90">{ROUND_LABEL[round.state]}</span>{timeAgo(round.at) ? ` ${timeAgo(round.at)}` : ""}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 export const ReviewHeader = memo(function ReviewHeader({
   review,
   checks,
   intent,
   trailing,
+  onShowFeedback,
+  onSnooze,
+  snoozing = false,
 }: {
   review: any;
   checks?: ChecksSummary;
   intent?: string;
   /** Actions at the end of the title row, such as Re-review. */
   trailing?: ReactNode;
+  /** The progress pill opens the Feedback view. */
+  onShowFeedback?: () => void;
+  /** "Not yet" (true) or "Back to Needs review" (false). */
+  onSnooze?: (snoozed: boolean) => void;
+  snoozing?: boolean;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (!review) return null;
   const showIntentToggle = !!intent && intent.length > INTENT_TOGGLE_THRESHOLD;
   const kind = kindLook(review);
   const state = reviewState(review);
+  const turn: Turn = review.turn ?? computeTurn(review);
+  const reviewed = !!(review.submittedVerdict || review.submittedAt || review.signals?.lastReviewAt);
+  const rounds: ReviewRound[] = review.signals?.rounds ?? [];
+  const progress: { done: number; total: number; source: "assistant" | "threads" } | null = review.progress ?? null;
 
   return (
     <header className="flex items-start gap-3">
@@ -73,6 +104,21 @@ export const ReviewHeader = memo(function ReviewHeader({
           <div className="flex shrink-0 flex-wrap items-center gap-2">
             <CiBadge checks={checks} />
             {state.label !== "Ready" && <StatusBadge review={review} />}
+            {turn.blocking && <Badge tone="warning" icon={<Icon name="Lock" aria-hidden />} title="Everyone else approved; only your changes requested is left.">Blocks merge</Badge>}
+            {progress && progress.total > 0 && (
+              <button type="button" onClick={onShowFeedback} title="Show your feedback" className="rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+                <Badge tone={progress.done === progress.total ? "success" : "primary"} className="cursor-pointer tabular-nums" icon={progress.source === "assistant" ? <Icon name="Sparkles" aria-hidden /> : <Icon name="MessageSquare" aria-hidden />}>
+                  {progress.done}/{progress.total} {progress.source === "assistant" ? "addressed" : "resolved"}
+                </Badge>
+              </button>
+            )}
+            {onSnooze && turn.reason === "snoozed" ? (
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-muted-foreground" disabled={snoozing} onClick={() => onSnooze(false)}>Back to Needs review</Button>
+            ) : onSnooze && turn.group === "needs" && reviewed && (
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-muted-foreground" disabled={snoozing} onClick={() => onSnooze(true)}>
+                <Icon name="Clock" className="size-3.5" aria-hidden />Not yet
+              </Button>
+            )}
             {trailing}
           </div>
         </div>
@@ -82,6 +128,7 @@ export const ReviewHeader = memo(function ReviewHeader({
           {review.base && review.head
             ? <span className="inline-flex min-w-0 items-center gap-1"><BranchChip>{review.base}</BranchChip><Icon name="ArrowRight" className="size-3 shrink-0 rotate-180 text-subtle-foreground" aria-hidden /><BranchChip>{review.head}</BranchChip></span>
             : review.gitRef && <BranchChip>{review.gitRef}</BranchChip>}
+          {rounds.length > 0 && <RoundTimeline rounds={rounds} />}
         </div>
         {intent && (
           <div className="max-w-[80ch] border-l-2 border-primary/40 pl-3">
