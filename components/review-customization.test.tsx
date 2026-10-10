@@ -314,8 +314,8 @@ test("a draft labels agents' comments, and Remove names the comment's location",
   const slot = renderSlot({ component: (props: any) => <DraftTray {...props} /> }, { targetKey: "labels", activeChapterId: "c1", activeFiles: ["a.ts"] }, { rpc: {
     setReviewPresence: () => ({ ok: true }), getReviewerNotes: () => ({ body: "", revision: 0 }), getDraft: () => ({ draft }), removeDraftComment,
   } });
-  await slot.findByText("a.ts:2 · Original · Added by agent");
-  expect(slot.getByText("a.ts:1 · Changed")).toBeTruthy();
+  await slot.findByRole("button", { name: "a.ts:2 · Original · Added by agent" });
+  expect(slot.getByRole("button", { name: "a.ts:1 · Changed" })).toBeTruthy();
   fireEvent.click(slot.getByRole("button", { name: "Remove comment on a.ts:2" }));
   await waitFor(() => expect(removeDraftComment).toHaveBeenCalledWith({ targetKey: "labels", file: "a.ts", line: 2, side: "LEFT" }));
   await waitFor(() => expect(slot.queryByText("The agent's comment")).toBeNull());

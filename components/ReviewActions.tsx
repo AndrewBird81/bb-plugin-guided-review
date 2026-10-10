@@ -65,10 +65,10 @@ export function ReviewActions({ review, onChanged, onDeleted, describedBy, class
         </Button>
       </PopoverTrigger>
       <PopoverContent align="end" mobileTitle="Review actions" className="w-60 max-w-[calc(100vw-24px)] p-1">
-        {!closed && <Button variant="ghost" size="sm" className="w-full justify-start" onClick={() => void setArchived(!review.userArchivedAt)}>
+        {!closed && <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground hover:text-foreground" onClick={() => void setArchived(!review.userArchivedAt)}>
           <Icon name={review.userArchivedAt ? "ArchiveRestore" : "Archive"} aria-hidden />{review.userArchivedAt ? "Unarchive" : "Archive"}
         </Button>}
-        <Button variant="ghost" size="sm" className="w-full justify-start text-destructive hover:text-destructive" disabled={review.status === "generating"} onClick={() => { setMenuOpen(false); setConfirming(true); }}>
+        <Button variant="ghost" size="sm" className="w-full justify-start text-destructive-text hover:bg-destructive/10 hover:text-destructive-text" disabled={review.status === "generating"} onClick={() => { setMenuOpen(false); setConfirming(true); }}>
           <Icon name="Trash2" aria-hidden />Delete…
         </Button>
         {review.status === "generating" && <p className="px-3 pb-2 text-xs text-muted-foreground">You can delete this review once its guide finishes generating.</p>}

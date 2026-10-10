@@ -12,6 +12,8 @@ import { clampRect, defaultRect, type Rect } from "../lib/dock-geometry";
 import { Icon } from "./ui/icon";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
+import { Markdown } from "@get-bb/plugin-sdk/app";
+import { Badge, SpeakerMark } from "./ui/badge";
 
 export interface DockInjection { context: AgentMessageContext; nonce: number; }
 export interface AgentDockProps {
@@ -152,38 +154,47 @@ export const AgentDock = memo(function AgentDock({ targetKey, patch, injection, 
   }
 
   const legacy = conversation?.legacy.length ? <div className="space-y-4 p-3">
-    <p className="text-xs font-medium text-muted-foreground">Earlier conversation</p>
-    {conversation.legacy.map((message) => <div key={message.id} className="space-y-1.5">
-      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground"><span className="font-medium">{message.role === "user" ? "You" : "Assistant"}</span>{message.role === "user" && message.context && <span className="break-all">{contextLabel(message.context)}</span>}</div>
-      <p className={cn("whitespace-pre-wrap break-words text-sm leading-relaxed", message.role === "user" && "rounded-md bg-muted px-3 py-2")}>{message.text}</p>
-    </div>)}
+    <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-subtle-foreground"><span className="h-px flex-1 bg-border" />Earlier conversation<span className="h-px flex-1 bg-border" /></p>
+    {conversation.legacy.map((message) => message.role === "user"
+      ? <div key={message.id} className="flex flex-col items-end gap-1">
+          {message.context && <span className="max-w-full truncate font-mono text-[11px] text-muted-foreground">{contextLabel(message.context)}</span>}
+          <p className="max-w-[85%] whitespace-pre-wrap break-words rounded-xl rounded-br-sm bg-primary/10 px-3 py-2 text-sm leading-relaxed ring-1 ring-inset ring-primary/20">{message.text}</p>
+        </div>
+      : <div key={message.id} className="space-y-1">
+          <span className="flex items-center gap-1.5 text-xs font-medium"><SpeakerMark agent />Assistant</span>
+          <div className="pl-6"><Markdown content={message.text} className="text-sm leading-relaxed" /></div>
+        </div>)}
   </div> : undefined;
   const firstMessage = <>
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="space-y-2 p-3 text-sm leading-relaxed"><p>Ask about this change.</p><p className="text-muted-foreground">Discuss a file, check a risk, or select lines in the diff for a focused question. Your conversation stays with this review.</p></div>
+      <div className="flex flex-col items-center gap-2 px-4 pb-2 pt-6 text-center">
+        <span aria-hidden className="flex size-11 items-center justify-center rounded-2xl bg-(--ansi-13)/10 text-(--ansi-13) ring-1 ring-inset ring-(--ansi-13)/25"><Icon name="Sparkles" className="size-5" /></span>
+        <p className="text-sm font-medium">Ask about this change.</p>
+        <p className="max-w-xs text-sm leading-relaxed text-muted-foreground">Discuss a file, check a risk, or select lines in the diff for a focused question. Your conversation stays with this review.</p>
+      </div>
       {legacy}
     </div>
-    <div className="shrink-0 space-y-2 border-t border-border p-3">
-      {chip && <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground"><span className="shrink-0">Context</span><span className="truncate text-foreground">{contextLabel(chip)}</span><Button variant="ghost" size="sm" className="h-6 px-1" aria-label="Clear selection context" onClick={() => setChip(null)}><Icon name="X" className="size-3" aria-hidden /></Button></div>}
+    <div className="shrink-0 space-y-2 border-t border-border bg-surface-raised p-3">
+      {chip && <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground"><span className="shrink-0">Context</span><Badge tone="primary" className="min-w-0 font-mono" icon={<Icon name="File" aria-hidden />}><span className="truncate">{contextLabel(chip)}</span></Badge><Button variant="ghost" size="sm" className="h-6 px-1" aria-label="Clear selection context" onClick={() => setChip(null)}><Icon name="X" className="size-3" aria-hidden /></Button></div>}
       <Textarea ref={composerRef} aria-label="Ask the agent" disabled={busy} value={input} onChange={(event) => setInput(event.target.value)} onKeyDown={(event) => {
         if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); void start(); }
-      }} placeholder="Ask the agent…" className="max-h-32 min-h-20 resize-none text-sm" />
+      }} placeholder="Ask the agent…" className="max-h-32 min-h-20 resize-none rounded-lg bg-background text-sm focus-visible:border-(--ansi-13)/50 focus-visible:ring-[3px] focus-visible:ring-(--ansi-13)/15" />
       <div className="flex min-w-0 items-center gap-2">
         <ProviderModelPicker value={agent} onChange={(next) => setAgent({ ...(hostId ? { hostId } : {}), ...next })} routing={hostId ? { kind: "host", hostId } : undefined} disabled={busy} className="min-w-0" />
         {conversation?.machine && <span className="min-w-0 truncate text-xs text-muted-foreground">{conversation.machine.connected ? `on ${conversation.machine.name}` : `${conversation.machine.name} is offline`}</span>}
-        <Button size="sm" className="ml-auto" disabled={busy || !input.trim() || !agent.providerId || !agent.model} onClick={() => void start()} aria-label="Send"><Icon name="ArrowUp" className="size-4" aria-hidden /></Button>
+        <Button size="sm" className="ml-auto size-8 rounded-lg p-0" disabled={busy || !input.trim() || !agent.providerId || !agent.model} onClick={() => void start()} aria-label="Send"><Icon name={busy ? "Loading" : "ArrowUp"} className={cn("size-4", busy && "animate-spin motion-reduce:animate-none")} aria-hidden /></Button>
       </div>
     </div>
   </>;
   const body = loadError
-    ? <div role="alert" className="space-y-2 p-3 text-sm"><p>Couldn’t load the conversation.</p><Button variant="outline" size="sm" onClick={() => void load()}>Retry conversation</Button></div>
+    ? <div role="alert" className="m-3 space-y-2 rounded-lg border border-destructive/20 bg-destructive/10 p-3 text-sm text-destructive-text"><p>Couldn’t load the conversation.</p><Button variant="outline" size="sm" onClick={() => void load()}>Retry conversation</Button></div>
     : !conversation ? <p role="status" className="p-3 text-sm text-muted-foreground">Loading conversation…</p>
     : threadId ? <ThreadChat threadId={threadId} variant="compact" className="min-h-0 flex-1" leadingContent={legacy} />
     : firstMessage;
 
   const panel = <>
-    <div className={cn("flex shrink-0 items-center gap-2 border-b border-border px-3 py-2", mode === "widget" && "cursor-move")} onPointerDown={mode === "widget" ? (event) => startGesture(event, "move") : undefined}>
-      <Icon name="AiContentGenerator01" className="size-4 text-muted-foreground" aria-hidden />
+    <div className={cn("flex h-11 shrink-0 items-center gap-2 border-b border-border px-3", mode === "widget" && "cursor-move bg-surface-raised")} onPointerDown={mode === "widget" ? (event) => startGesture(event, "move") : undefined}>
+      <Icon name="Sparkles" className="size-4 text-(--ansi-13)" aria-hidden />
       <span className="text-sm font-medium">Review assistant</span>
       {(threadId || conversation?.legacy.length) ? <Button variant="ghost" size="icon" className="ml-auto size-7" aria-label="New conversation" onPointerDown={(event) => event.stopPropagation()} onClick={() => setConfirmingReset(true)}><Icon name="MessageSquarePlus" className="size-3.5" aria-hidden /></Button> : null}
       <Button variant="ghost" size="sm" className={cn(!(threadId || conversation?.legacy.length) && "ml-auto")} aria-label={mode === "widget" ? "Dock in review panel" : "Open assistant as widget"} onPointerDown={(event) => event.stopPropagation()} onClick={mode === "widget" ? dock : () => setMode("widget")}>
@@ -191,7 +202,7 @@ export const AgentDock = memo(function AgentDock({ targetKey, patch, injection, 
       </Button>
       {mode === "panel" && onCollapse && <Button variant="ghost" size="icon" className="hidden size-7 text-muted-foreground @min-[1024px]/review:inline-flex" aria-label="Collapse review panel" onClick={onCollapse}><Icon name="X" aria-hidden /></Button>}
     </div>
-    {confirmingReset && <div role="alertdialog" aria-label="Start a new conversation" className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border px-3 py-2 text-xs">
+    {confirmingReset && <div role="alertdialog" aria-label="Start a new conversation" className="flex shrink-0 flex-wrap items-center gap-2 border-b border-warning/20 bg-warning/10 px-3 py-2 text-xs">
       <span className="min-w-0 flex-1">Archive this conversation and start a new one?</span>
       <Button variant="outline" size="sm" onClick={() => void reset()}>Start new</Button>
       <Button variant="ghost" size="sm" onClick={() => setConfirmingReset(false)}>Cancel</Button>

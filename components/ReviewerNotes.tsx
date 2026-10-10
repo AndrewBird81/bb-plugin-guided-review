@@ -3,6 +3,8 @@ import { useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../src/rpc-contract";
 import { Textarea } from "./ui/textarea";
 import { Button } from "./ui/button";
+import { Icon } from "./ui/icon";
+import { cn } from "../lib/utils";
 import type { ReviewerNotesRecord } from "../src/preferences";
 
 export function ReviewerNotes({ targetKey }: { targetKey: string }) {
@@ -69,8 +71,8 @@ export function ReviewerNotes({ targetKey }: { targetKey: string }) {
     } catch { if (mounted.current) { setStatus("Couldn’t load the saved version. Your edits are still here."); setError(true); } }
   }
   return <section aria-label="Private reviewer notes" className="space-y-3 p-3">
-    <p className="text-xs leading-relaxed text-muted-foreground">Your scratchpad for questions, checks, and decisions. Saved in BB, never included in GitHub submissions or assistant prompts.</p>
-    <Textarea aria-label="Private reviewer notes" rows={8} maxLength={100000} disabled={!loaded} value={body} placeholder="What do you want to verify before you finish?" onChange={(event) => {
+    <p className="flex items-start gap-2 rounded-lg border border-border bg-muted/25 px-3 py-2 text-xs leading-relaxed text-muted-foreground"><Icon name="Lock" className="mt-0.5 size-3.5 shrink-0 text-subtle-foreground" aria-hidden />Your scratchpad for questions, checks, and decisions. Saved in BB, never included in GitHub submissions or assistant prompts.</p>
+    <Textarea aria-label="Private reviewer notes" rows={10} maxLength={100000} disabled={!loaded} value={body} placeholder="What do you want to verify before you finish?" className="rounded-lg bg-surface-raised font-mono text-[13px] leading-relaxed" onChange={(event) => {
       const value = event.target.value;
       setBody(value); state.current.body = value; state.current.dirty = true;
       try { localStorage.setItem(backupKey, JSON.stringify({ body: value, revision: state.current.revision })); } catch { /* best effort */ }
@@ -78,7 +80,7 @@ export function ReviewerNotes({ targetKey }: { targetKey: string }) {
       if (pending.current) clearTimeout(pending.current);
       pending.current = setTimeout(() => { void flush().catch(() => {}); }, 500);
     }} onBlur={() => void flush().catch(() => {})} />
-    <p role={error ? "alert" : "status"} className="text-xs text-muted-foreground">{status}</p>
+    <p role={error ? "alert" : "status"} className={cn("flex items-center gap-1.5 text-xs", error ? "text-destructive-text" : "text-muted-foreground")}><Icon name={error ? "AlertCircle" : saving || status.startsWith("Saving") ? "Loading" : status === "Notes saved" ? "CircleCheck" : "Info"} className={cn("size-3.5", !error && status === "Notes saved" && "text-diff-added", (saving || status.startsWith("Saving")) && "animate-spin motion-reduce:animate-none")} aria-hidden />{status}</p>
     {(error || state.current.dirty) && <div className="flex flex-wrap gap-2"><Button variant="outline" size="sm" disabled={!loaded || saving} onClick={() => void flush().catch(() => {})}>Save notes</Button>{error && <Button variant="ghost" size="sm" disabled={saving} onClick={() => loaded ? void compareSaved() : void load()}>{loaded ? "Compare saved notes" : "Retry notes"}</Button>}</div>}
     {comparison && <div className="space-y-3 border-t border-border pt-3">
       <p className="text-xs text-muted-foreground">Saved version below. Your edits are still in the editor above.</p>

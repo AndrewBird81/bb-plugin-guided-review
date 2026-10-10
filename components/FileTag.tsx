@@ -1,14 +1,14 @@
 import { memo } from "react";
 import { cn } from "../lib/utils";
 import { classifyFile, type FileCategory } from "../src/classify";
+import { Badge, type Tone } from "./ui/badge";
 
-const CATEGORY_STYLE: Record<FileCategory, string> = {
-  test: "border-amber-500/30 text-amber-600 dark:text-amber-400",
-  generated: "border-border text-muted-foreground",
-  lockfile: "border-border text-muted-foreground",
-  docs: "border-sky-500/30 text-sky-600 dark:text-sky-400",
-  config: "border-border text-muted-foreground",
-  code: "",
+const CATEGORY_TONE: Record<Exclude<FileCategory, "code">, Tone> = {
+  test: "neutral",
+  generated: "neutral",
+  lockfile: "neutral",
+  docs: "primary",
+  config: "neutral",
 };
 
 /**
@@ -20,16 +20,14 @@ export const FileTag = memo(function FileTag({ file, className }: { file: string
   const c = classifyFile(file);
   if (c.category === "code") return null;
   return (
-    <span
-      className={cn(
-        "shrink-0 rounded-full border px-1.5 py-0 text-[10px] leading-4",
-        CATEGORY_STYLE[c.category],
-        className,
-      )}
+    <Badge
+      tone={CATEGORY_TONE[c.category]}
+      size="sm"
+      className={cn("font-normal", c.skippable && "border-dashed opacity-80", className)}
       title={c.skippable ? `${c.label} — low-value to review, safe to skim` : c.label}
     >
       {c.skippable ? `${c.label} · skip` : c.label}
-    </span>
+    </Badge>
   );
 });
 FileTag.displayName = "FileTag";

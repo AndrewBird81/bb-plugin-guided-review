@@ -8,7 +8,9 @@ import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { useReviewSession } from "../lib/review-session";
 import { ReleaseSettings, SetupReadiness } from "./ReleaseSettings";
-import { Icon } from "./ui/icon";
+import { Icon, type IconName } from "./ui/icon";
+import { IconTile } from "./ui/icon-tile";
+import type { Tone } from "./ui/badge";
 
 type AgentUpdate = (agent: AgentExecution | null) => AgentExecution | null;
 /** undefined while loading; null when they couldn't be loaded. */
@@ -23,7 +25,7 @@ function MachineSelect({ hostId, machines, disabled, onChange }: {
   const value = hostId && hostId !== server?.hostId ? hostId : "";
   return <label className="flex min-w-0 items-center gap-2 text-sm">
     <span className="text-muted-foreground">Machine</span>
-    <select aria-label="Machine" disabled={disabled} value={value} onChange={(event) => onChange(event.target.value || undefined)} className="h-8 min-w-0 rounded-md border border-border bg-background px-2 text-sm text-foreground">
+    <select aria-label="Machine" disabled={disabled} value={value} onChange={(event) => onChange(event.target.value || undefined)} className="h-8 min-w-0 rounded-md border border-border bg-background px-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">
       <option value="">{server ? `${server.name} (server)` : "bb server"}</option>
       {others.map((machine) => <option key={machine.hostId} value={machine.hostId}>{machine.connected ? machine.name : `${machine.name} (offline)`}</option>)}
       {value && !others.some((machine) => machine.hostId === value) && <option value={value}>{machines ? "Removed machine" : value}</option>}
@@ -40,8 +42,8 @@ function AgentSelection({ label, agent, machines, disabled, note, onCustomize, o
   return <div className="space-y-2">
     <p className="text-sm font-medium">Agent</p>
     <div role="group" aria-label={label} className="flex flex-wrap gap-2">
-      <Button variant="outline" size="sm" className="aria-pressed:border-foreground aria-pressed:bg-state-active" aria-pressed={!agent} onClick={() => onChange(() => null)}>Project defaults</Button>
-      <Button variant="outline" size="sm" className="aria-pressed:border-foreground aria-pressed:bg-state-active" aria-pressed={!!agent} onClick={() => { if (!agent) onCustomize(); }}>Custom</Button>
+      <Button variant="outline" size="sm" className="aria-pressed:border-primary/50 aria-pressed:bg-primary/10 aria-pressed:text-primary" aria-pressed={!agent} onClick={() => onChange(() => null)}>Project defaults</Button>
+      <Button variant="outline" size="sm" className="aria-pressed:border-primary/50 aria-pressed:bg-primary/10 aria-pressed:text-primary" aria-pressed={!!agent} onClick={() => { if (!agent) onCustomize(); }}>Custom</Button>
     </div>
     {agent ? <div className="flex flex-wrap items-center gap-2">
       <MachineSelect hostId={agent.hostId} machines={machines} disabled={disabled} onChange={(hostId) => onChange((current) => {
@@ -56,6 +58,13 @@ function AgentSelection({ label, agent, machines, disabled, note, onCustomize, o
     </div> : <p className="text-xs text-muted-foreground">Runs on the bb server with the agent, model, effort, and permissions bb remembers for the project the review runs in.</p>}
     {agent && machines === null && <p className="text-xs text-muted-foreground">Couldn’t load your machines. Reload this page to choose another machine.</p>}
     {note && <p className="text-xs text-muted-foreground">{note}</p>}
+  </div>;
+}
+
+function SectionHeading({ icon, tone = "primary", title, description }: { icon: IconName; tone?: Tone; title: string; description?: string }) {
+  return <div className="flex items-start gap-3">
+    <IconTile tone={tone} icon={icon} />
+    <div className="min-w-0"><h2 className="text-sm font-semibold">{title}</h2>{description && <p className="mt-1 max-w-[75ch] text-sm text-muted-foreground">{description}</p>}</div>
   </div>;
 }
 
@@ -108,42 +117,42 @@ export function ReviewSettings({ onBack }: { onBack?: () => void }) {
   }
   if (!session.ready) return <div className="space-y-3 p-6"><p role={session.error ? "alert" : "status"}>{session.error || "Opening settings…"}</p>{session.error && <Button onClick={session.retry}>Try again</Button>}</div>;
   return <div className="h-full min-w-0 overflow-y-auto" style={{ backgroundColor: "rgb(from var(--background) r g b / 1)" }}>
-    <div className="mx-auto w-full max-w-6xl space-y-7 px-4 py-5 sm:px-8">
-      <div className="space-y-3">
+    <div className="mx-auto w-full max-w-6xl space-y-4 px-4 py-5 sm:px-8">
+      <div className="space-y-4 pb-2">
         {onBack && <Button variant="ghost" size="sm" onClick={onBack} disabled={dirty || busy || updating}><Icon name="ArrowRight" className="size-4 rotate-180" aria-hidden /> Back to review</Button>}
-        <div><h1 className="text-xl font-semibold">Review settings</h1><p className="mt-1 text-sm text-muted-foreground">Shape your guides and how the assistant helps you review. Applies across this BB installation.</p></div>
+        <div className="flex items-center gap-3"><IconTile tone="primary" icon="Settings" className="size-10 rounded-xl" iconClassName="size-5" /><div><h1 className="text-xl font-semibold">Review settings</h1><p className="mt-1 max-w-[75ch] text-sm text-muted-foreground">Shape your guides and how the assistant helps you review. Applies across this BB installation.</p></div></div>
       </div>
       <SetupReadiness />
       <ReleaseSettings clientId={session.clientId} disabled={dirty || busy} onUpdatingChange={setUpdating} />
-      <section className="space-y-2 border-t border-border pt-5">
-        <h2 className="text-sm font-semibold">Guide notifications</h2>
-        <p className="text-sm text-muted-foreground">Needs You can alert you when a guide is ready or generation fails, with a link back to the review. Install or update Needs You to 0.2.0-beta.3 or later, then enable Extension activity in its Settings. Telegram is optional.</p>
-        <a className="text-sm underline underline-offset-4" href="/plugins/inbox/inbox/settings" target="_blank" rel="noreferrer">Open Needs You settings</a>
+      <section className="space-y-3 rounded-xl border border-border bg-card p-5 shadow-xs">
+        <SectionHeading icon="Mail" title="Guide notifications" />
+        <p className="max-w-[75ch] text-sm text-muted-foreground">Needs You can alert you when a guide is ready or generation fails, with a link back to the review. Install or update Needs You to 0.2.0-beta.3 or later, then enable Extension activity in its Settings. Telegram is optional.</p>
+        <a className="inline-block text-sm text-primary underline underline-offset-4" href="/plugins/inbox/inbox/settings" target="_blank" rel="noreferrer">Open Needs You settings</a>
       </section>
-      {error && <div role="alert" className="space-y-2 text-sm text-destructive"><p>{error}</p><Button variant="outline" size="sm" disabled={busy || updating} onClick={() => void load()}>Reload saved settings</Button></div>}
+      {error && <div role="alert" className="space-y-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive-text"><p className="flex items-start gap-2"><Icon name="AlertCircle" className="mt-0.5 size-4 shrink-0" aria-hidden />{error}</p><Button variant="outline" size="sm" disabled={busy || updating} onClick={() => void load()}>Reload saved settings</Button></div>}
       {!record ? !error && <p role="status">Loading settings…</p> : <>
-        <fieldset disabled={busy || updating} className="space-y-6">
-          <section className="space-y-4 border-t border-border pt-5">
-            <div><h2 className="text-sm font-semibold">Guide generation</h2><p className="mt-1 text-sm text-muted-foreground">Used when starting a guide or running Re-review. Existing guides stay as written.</p></div>
+        <fieldset disabled={busy || updating} className="space-y-4">
+          <section className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-xs">
+            <SectionHeading icon="Route" title="Guide generation" description="Used when starting a guide or running Re-review. Existing guides stay as written." />
             <AgentSelection label="Guide writer agent" agent={record.preferences.guideAgent} machines={machines} disabled={busy || updating} onCustomize={() => void customize("guideAgent")} onChange={(update) => setAgent("guideAgent", update)} />
             <div className="space-y-2"><p id="guide-detail-label" className="text-sm font-medium">Detail level</p><div role="group" aria-labelledby="guide-detail-label" className="flex flex-wrap gap-2">
-              {(["concise", "standard", "detailed"] as const).map((value) => <Button key={value} variant="outline" size="sm" className="aria-pressed:border-foreground aria-pressed:bg-state-active" aria-pressed={record.preferences.guideDetail === value} onClick={() => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, guideDetail: value } }); }}>{value[0].toUpperCase() + value.slice(1)}</Button>)}
+              {(["concise", "standard", "detailed"] as const).map((value) => <Button key={value} variant="outline" size="sm" className="aria-pressed:border-primary/50 aria-pressed:bg-primary/10 aria-pressed:text-primary" aria-pressed={record.preferences.guideDetail === value} onClick={() => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, guideDetail: value } }); }}>{value[0].toUpperCase() + value.slice(1)}</Button>)}
             </div></div>
             <label className="block space-y-2"><span className="text-sm font-medium">Guide instructions</span><Textarea aria-label="Guide instructions" maxLength={12000} rows={6} value={record.preferences.guideInstructions} onChange={(event) => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, guideInstructions: event.target.value } }); }} placeholder="Explain data migrations and compatibility. Keep tests with the behavior they cover. Write for engineers new to this repository." /><span className="block text-xs text-muted-foreground">Add review priorities, language, and team conventions. These extend the built-in guide skill.</span></label>
-            <details className="text-sm"><summary className="cursor-pointer text-muted-foreground">About the guide skill</summary><div className="mt-3 space-y-2 text-muted-foreground"><p>The bundled skill reads the complete diff, organizes chapters by meaning, and covers every changed file exactly once. Custom instructions shape its explanations while the required output format stays validated.</p><p>Based on the chaptered walkthrough approach from <a className="underline underline-offset-4" href="https://github.com/plannotator/guides/blob/main/skills/plannotator-guide/SKILL.md" target="_blank" rel="noreferrer">Plannotator’s guide skill</a>, adapted for BB. Guides run through the agent selected above.</p></div></details>
+            <details className="text-sm"><summary className="w-fit cursor-pointer rounded-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50">About the guide skill</summary><div className="mt-3 space-y-2 text-muted-foreground"><p>The bundled skill reads the complete diff, organizes chapters by meaning, and covers every changed file exactly once. Custom instructions shape its explanations while the required output format stays validated.</p><p>Based on the chaptered walkthrough approach from <a className="underline underline-offset-4" href="https://github.com/plannotator/guides/blob/main/skills/plannotator-guide/SKILL.md" target="_blank" rel="noreferrer">Plannotator’s guide skill</a>, adapted for BB. Guides run through the agent selected above.</p></div></details>
           </section>
-          <section className="space-y-4 border-t border-border pt-5">
-            <div><h2 className="text-sm font-semibold">Review assistant</h2><p className="mt-1 text-sm text-muted-foreground">Applies to your next message, including conversations already in progress.</p></div>
+          <section className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-xs">
+            <SectionHeading icon="Sparkles" tone="agent" title="Review assistant" description="Applies to your next message, including conversations already in progress." />
             <AgentSelection label="Review assistant agent" agent={record.preferences.assistantAgent} machines={machines} disabled={busy || updating} note="Used to start new conversations, which stay on the machine they started on. In a conversation, change the model and effort per message." onCustomize={() => void customize("assistantAgent")} onChange={(update) => setAgent("assistantAgent", update)} />
             <label className="block space-y-2"><span className="text-sm font-medium">Assistant instructions</span><Textarea aria-label="Assistant instructions" maxLength={12000} rows={5} value={record.preferences.assistantInstructions} onChange={(event) => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, assistantInstructions: event.target.value } }); }} placeholder="Prioritize correctness and security. Show a concrete failure case for suspected bugs. Keep suggestions actionable." /></label>
             <label className="block space-y-2"><span className="text-sm font-medium">Automatic review</span><Textarea aria-label="Automatic review" maxLength={12000} rows={4} value={record.preferences.automaticReview} onChange={(event) => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, automaticReview: event.target.value } }); }} /><span className="block text-xs text-muted-foreground">Sent to the assistant when a guide is ready and the review has no conversation yet. Its draft comments wait in Draft comments for you to edit and submit. Leave blank to turn the automatic review off.</span></label>
           </section>
-          <section className="space-y-3 border-t border-border pt-5">
-            <div><h2 className="text-sm font-semibold">Reading layout</h2><p className="mt-1 text-sm text-muted-foreground">Choose the default diff layout. Narrow screens use a single column.</p></div>
-            <div role="group" aria-label="Default diff layout" className="flex flex-wrap gap-2">{([ ["split", "Side by side"], ["unified", "Unified"] ] as const).map(([value, label]) => <Button key={value} variant="outline" size="sm" className="aria-pressed:border-foreground aria-pressed:bg-state-active" aria-pressed={record.preferences.diffLayout === value} onClick={() => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, diffLayout: value } }); }}>{label}</Button>)}</div>
+          <section className="space-y-4 rounded-xl border border-border bg-card p-5 shadow-xs">
+            <SectionHeading icon="Columns2" title="Reading layout" description="Choose the default diff layout. Narrow screens use a single column." />
+            <div role="group" aria-label="Default diff layout" className="flex flex-wrap gap-2">{([ ["split", "Side by side"], ["unified", "Unified"] ] as const).map(([value, label]) => <Button key={value} variant="outline" size="sm" className="aria-pressed:border-primary/50 aria-pressed:bg-primary/10 aria-pressed:text-primary" aria-pressed={record.preferences.diffLayout === value} onClick={() => { setSaved(false); setRecord({ ...record, preferences: { ...record.preferences, diffLayout: value } }); }}>{label}</Button>)}</div>
           </section>
         </fieldset>
-        <div className="sticky bottom-0 flex flex-wrap items-center gap-3 border-t border-border bg-background py-4">
+        <div className="sticky bottom-0 flex flex-wrap items-center gap-3 border-t border-border bg-background/90 py-4 backdrop-blur">
           <Button disabled={!dirty || incomplete || busy || updating} onClick={() => void save()}>{busy ? "Saving…" : "Save settings"}</Button>
           {dirty && <Button variant="ghost" disabled={busy || updating} onClick={() => { setRecord({ ...record, preferences: JSON.parse(baseline) }); setError(""); }}>Discard edits</Button>}
           <span role="status" className="text-xs text-muted-foreground">{saved ? "Settings saved" : dirty ? "Unsaved changes" : ""}</span>

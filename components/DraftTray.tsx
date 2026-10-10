@@ -16,6 +16,10 @@ import { getReviewState, patchReviewState } from "../lib/panel-state";
 import { readDraftRecovery, updateDraftRecovery } from "../lib/draft-recovery";
 import { usePortalScopeProps } from "../lib/portal-scope";
 import { InlineComposerContext, InlineDraftContext, type InlineComposer, type InlineDraft } from "./InlineDraft";
+import { Markdown } from "@get-bb/plugin-sdk/app";
+import { Badge } from "./ui/badge";
+import { FilePath } from "./ui/file-path";
+import { withLineBreaks } from "../src/line-breaks";
 
 /**
  * A request from the diff to comment on a line, or with `ask` to message the
@@ -261,6 +265,8 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
   }
 
   const hasReview = draft.comments.length > 0 || draft.body.trim().length > 0 || draft.verdict === "APPROVE";
+  // The status line also carries save and submit failures; only these two are good news.
+  const savedTone = saved === "Saving draft…" ? "saving" : saved === "Draft saved" || saved === "Review submitted" ? "ok" : "error";
   const submittedVerdict = review ? review.submittedVerdict : receipt;
   const closed = review?.prState === "MERGED" || review?.prState === "CLOSED";
   const completed = submittedVerdict && !hasReview && !writeAnother && !body.trim();
@@ -295,13 +301,13 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
   return <InlineDraftContext.Provider value={inlineDraft}><InlineComposerContext.Provider value={inlineComposer}>
   {children}
   <aside aria-label="Review tools" className={cn("flex max-h-[50vh] min-h-0 shrink-0 flex-col border-t border-border bg-background @min-[1024px]/review:h-full @min-[1024px]/review:max-h-none @min-[1024px]/review:flex-row-reverse @min-[1024px]/review:border-l @min-[1024px]/review:border-t-0", toolsOpen ? "@min-[1024px]/review:w-[384px]" : "@min-[1024px]/review:w-11", toolsOpen && tab === "agent" && "h-[50vh]")}>
-    <div ref={railRef} role="group" aria-label="Review tools" className={cn("flex h-11 shrink-0 items-center gap-0.5 bg-muted/20 p-0.5 @min-[1024px]/review:h-full @min-[1024px]/review:w-11 @min-[1024px]/review:flex-col", toolsOpen && "border-b border-border @min-[1024px]/review:border-b-0 @min-[1024px]/review:border-l")}>
+    <div ref={railRef} role="group" aria-label="Review tools" className={cn("flex h-11 shrink-0 items-center gap-0.5 bg-surface-raised p-0.5 @min-[1024px]/review:h-full @min-[1024px]/review:w-11 @min-[1024px]/review:flex-col @min-[1024px]/review:gap-1 @min-[1024px]/review:pt-1.5", toolsOpen && "border-b border-border @min-[1024px]/review:border-b-0 @min-[1024px]/review:border-l")}>
       <Tooltip.Provider delayDuration={350}>
         {toolItems.map((tool) => <Tooltip.Root key={tool.id}>
           <Tooltip.Trigger asChild>
-            <Button variant="ghost" size="icon" data-tool={tool.id} aria-label={tool.label} aria-pressed={toolsOpen && tab === tool.id} aria-expanded={toolsOpen && tab === tool.id} aria-controls={panelId} onClick={() => selectTool(tool.id)} className={cn("relative size-10 shrink-0 rounded-none text-muted-foreground [&_svg]:size-[18px]", toolsOpen && tab === tool.id && "after:absolute after:inset-x-2 after:bottom-0 after:h-0.5 after:bg-primary @min-[1024px]/review:after:inset-y-2 @min-[1024px]/review:after:left-auto @min-[1024px]/review:after:right-0 @min-[1024px]/review:after:h-auto @min-[1024px]/review:after:w-0.5")}>
+            <Button variant="ghost" size="icon" data-tool={tool.id} aria-label={tool.label} aria-pressed={toolsOpen && tab === tool.id} aria-expanded={toolsOpen && tab === tool.id} aria-controls={panelId} onClick={() => selectTool(tool.id)} className={cn("relative size-10 shrink-0 rounded-lg text-muted-foreground aria-pressed:bg-primary/10 aria-pressed:text-primary aria-pressed:hover:bg-primary/15 [&_svg]:size-[18px]", tool.id === "agent" && "aria-pressed:bg-(--ansi-13)/10 aria-pressed:text-(--ansi-13) aria-pressed:hover:bg-(--ansi-13)/15", toolsOpen && tab === tool.id && "after:absolute after:inset-x-2.5 after:-bottom-0.5 after:h-0.5 after:rounded-full after:bg-current @min-[1024px]/review:after:inset-y-2.5 @min-[1024px]/review:after:-right-0.5 @min-[1024px]/review:after:left-auto @min-[1024px]/review:after:h-auto @min-[1024px]/review:after:w-0.5")}>
               <Icon name={tool.icon} aria-hidden />
-              {tool.count > 0 && <span aria-hidden className="absolute right-0.5 top-0.5 min-w-3.5 rounded-full bg-foreground px-0.5 text-center text-[10px] leading-[14px] text-background">{tool.count > 99 ? "99+" : tool.count}</span>}
+              {tool.count > 0 && <span aria-hidden className="absolute right-0.5 top-0.5 min-w-4 rounded-full bg-primary px-1 text-center text-[10px] font-semibold leading-4 text-primary-foreground ring-2 ring-background">{tool.count > 99 ? "99+" : tool.count}</span>}
             </Button>
           </Tooltip.Trigger>
           <Tooltip.Portal container={agent?.container ?? undefined}><Tooltip.Content {...scopeProps} side="left" sideOffset={8} collisionPadding={8} className="z-[75] rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-md">{tool.label}{tool.count > 0 ? ` (${tool.count})` : ""}</Tooltip.Content></Tooltip.Portal>
@@ -311,29 +317,39 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
       {toolsOpen && <Button variant="ghost" size="icon" className="size-8 shrink-0 text-muted-foreground @min-[1024px]/review:hidden" aria-label="Collapse review panel" onClick={collapse}><Icon name="X" aria-hidden /></Button>}
     </div>
     <div id={panelId} hidden={!toolsOpen} className={cn("flex min-h-0 min-w-0 flex-1 flex-col", !toolsOpen && "hidden")}>
-      {tab !== "agent" && <div className="hidden h-11 shrink-0 items-center gap-2 border-b border-border px-3 @min-[1024px]/review:flex"><h2 className="min-w-0 flex-1 truncate text-xs font-medium">{tab === "draft" ? "Draft comments" : "Reviewer notes"}</h2><Button variant="ghost" size="icon" className="size-7 text-muted-foreground" aria-label="Collapse review panel" onClick={collapse}><Icon name="X" aria-hidden /></Button></div>}
+      {tab !== "agent" && <div className="hidden h-11 shrink-0 items-center gap-2 border-b border-border px-3 @min-[1024px]/review:flex"><Icon name={tab === "draft" ? "MessageSquare" : "EditFile"} className="size-4 text-primary" aria-hidden /><h2 className="min-w-0 truncate text-sm font-medium">{tab === "draft" ? "Draft comments" : "Reviewer notes"}</h2>{tab === "draft" && draft.comments.length > 0 && <span className="rounded-full bg-muted px-1.5 text-[11px] leading-[18px] tabular-nums text-muted-foreground">{draft.comments.length}</span>}<span className="flex-1" /><Button variant="ghost" size="icon" className="size-7 text-muted-foreground" aria-label="Collapse review panel" onClick={collapse}><Icon name="X" aria-hidden /></Button></div>}
     {agent && <AgentDock targetKey={targetKey} {...agent} active={toolsOpen && tab === "agent"} onDock={() => { setTab("agent"); setToolsOpen(true); }} onCollapse={collapse} />}
     <div hidden={tab !== "notes"} className={cn("min-h-0 overflow-y-auto", tab !== "notes" && "hidden")}><ReviewerNotes targetKey={targetKey} /></div>
     <div hidden={tab !== "draft"} className={cn("min-h-0 flex-1 overflow-y-auto", tab !== "draft" && "hidden")}>
       {loadError ? <div role="alert" className="space-y-3 p-3 text-sm"><p>Couldn’t load your draft. Editing is paused to protect it.</p><Button variant="outline" onClick={() => void load()}>Retry draft</Button></div> : !loaded ? <p role="status" className="p-3 text-sm text-muted-foreground">Loading draft…</p> : closed ?
-        <section aria-label="Archived review" className="space-y-2 p-3">
-          <p className="text-sm font-medium">{review?.prState === "MERGED" ? "Merged" : "Closed"} · Archived</p>
-          <p className="text-xs text-muted-foreground">This review is saved in Archive. The guide, notes, and conversation remain available.</p>
+        <section aria-label="Archived review" className="m-3 space-y-2 rounded-lg border border-border bg-muted/25 p-3">
+          <p className="flex items-center gap-2 text-sm font-medium"><Icon name={review?.prState === "MERGED" ? "GitMerge" : "GitPullRequestClosed"} className={cn("size-4", review?.prState === "MERGED" ? "text-pr-merged" : "text-destructive-text")} aria-hidden />{review?.prState === "MERGED" ? "Merged" : "Closed"} · Archived</p>
+          <p className="text-xs leading-relaxed text-muted-foreground">This review is saved in Archive. The guide, notes, and conversation remain available.</p>
           {(draft.comments.length > 0 || draft.body) && <details className="text-sm"><summary className="cursor-pointer">Unsubmitted draft</summary><p className="mt-2 whitespace-pre-wrap">{draft.body}</p>{draft.comments.map((comment, index) => <p key={index} className="mt-2 break-words">{comment.file}:{comment.line} — {comment.body}</p>)}</details>}
         </section> : completed ?
-        <section aria-label="Submitted review" className="space-y-3 p-3">
-          <p className="flex items-center gap-2 text-sm font-medium"><Icon name="Check" className="size-4" aria-hidden />{reviewState({ targetKey, ...review, submittedVerdict }).label}</p>
+        <section aria-label="Submitted review" className="m-3 space-y-3 rounded-lg border border-success/25 bg-success/10 p-3">
+          <p className="flex items-center gap-2 text-sm font-medium text-diff-added"><Icon name="BadgeCheck" className="size-5" aria-hidden />{reviewState({ targetKey, ...review, submittedVerdict }).label}</p>
           <p className="text-xs text-muted-foreground">Review submitted to GitHub</p>
           <Button variant="outline" size="sm" onClick={() => setWriteAnother(true)}>Add another review</Button>
         </section> : <section aria-label="Review draft" className="flex flex-col">
           <div className="space-y-3 p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2"><span role="status" className="text-xs text-muted-foreground">{saved}</span><Button variant="ghost" size="sm" aria-expanded={showComposer && !inline} onClick={() => openComposer(null, false)}><Icon name="Plus" className="size-4" aria-hidden /> Add comment</Button></div>
+            <div className="flex flex-wrap items-center justify-between gap-2"><span role="status" className={cn("flex items-center gap-1.5 text-xs", savedTone === "error" ? "text-destructive-text" : "text-muted-foreground")}>{savedTone === "saving" ? <Icon name="Loading" className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden /> : savedTone === "error" ? <Icon name="AlertCircle" className="size-3.5 shrink-0" aria-hidden /> : <Icon name="CircleCheck" className="size-3.5 text-diff-added" aria-hidden />}{saved}</span><Button variant="ghost" size="sm" className="text-primary hover:text-primary" aria-expanded={showComposer && !inline} onClick={() => openComposer(null, false)}><Icon name="Plus" className="size-4" aria-hidden /> Add comment</Button></div>
             {saved.startsWith("Couldn’t") && <Button variant="outline" size="sm" onClick={() => void flush().catch(() => {})}>Save again</Button>}
-            {draft.comments.length ? <ul className="divide-y divide-border text-sm">{draft.comments.map((comment) => <li key={`${comment.file}:${comment.line}:${comment.side}`} className="space-y-2 py-3 first:pt-0">
-              <button type="button" className="block w-full break-words text-left text-xs text-muted-foreground hover:text-foreground hover:underline" onClick={() => onShowComment?.(comment)}>{comment.file}:{comment.line} · {comment.side === "LEFT" ? "Original" : "Changed"}{comment.author === "agent" ? " · Added by agent" : ""}{stale.some((at) => sameLocation(at, comment)) ? " · Older diff" : ""}{discussionLabel(discussions.find((d) => sameLocation(d, comment)))}</button>
-              <p className="whitespace-pre-wrap break-words">{comment.body}</p>
-              <div className="flex gap-1"><Button variant="ghost" size="sm" disabled={busy || !!body.trim()} aria-label={`Edit comment on ${comment.file}:${comment.line}`} onClick={() => openComposer(comment, false)}>Edit</Button><Button variant="ghost" size="sm" disabled={busy} aria-label={`Remove comment on ${comment.file}:${comment.line}`} onClick={() => void removeComment(comment)}>Remove</Button></div>
-            </li>)}</ul> : !showComposer && <p className="py-4 text-sm leading-relaxed text-muted-foreground">Select a line in the diff or add a comment here.</p>}
+            {draft.comments.length ? <ul className="space-y-2 text-sm">{draft.comments.map((comment) => {
+              const isStale = stale.some((at) => sameLocation(at, comment));
+              const discussion = discussions.find((d) => sameLocation(d, comment));
+              const messages = discussion?.entries.filter((entry) => entry.kind === "message").length ?? 0;
+              return <li key={`${comment.file}:${comment.line}:${comment.side}`} className={cn("group/comment space-y-2 rounded-lg border border-border bg-card p-3 transition-colors hover:border-input", comment.author === "agent" ? "border-l-[3px] border-l-(--ansi-13)/60" : "border-l-[3px] border-l-primary/60")}>
+              <button type="button" aria-label={`${comment.file}:${comment.line} · ${comment.side === "LEFT" ? "Original" : "Changed"}${comment.author === "agent" ? " · Added by agent" : ""}${isStale ? " · Older diff" : ""}${discussionLabel(discussion)}`} className="flex w-full min-w-0 flex-wrap items-center gap-1.5 rounded-sm text-left text-xs hover:[&_.gr-path]:underline" onClick={() => onShowComment?.(comment)}>
+                <span className="gr-path flex min-w-0 max-w-full items-center decoration-muted-foreground/50 underline-offset-2"><FilePath path={comment.file} className="min-w-0 text-[11px]" /><span className="shrink-0 font-mono text-[11px] text-primary">:{comment.line}</span></span>
+                <Badge size="sm">{comment.side === "LEFT" ? "Original" : "Changed"}</Badge>
+                {comment.author === "agent" && <Badge tone="agent" size="sm" icon={<Icon name="Sparkles" aria-hidden />}>Agent</Badge>}
+                {isStale && <Badge tone="warning" size="sm">Older diff</Badge>}
+                {discussion?.waiting ? <Badge tone="agent" dot pulse size="sm">Waiting for agent</Badge> : messages > 0 && <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground"><Icon name="MessageSquare" className="size-3" aria-hidden />{messages}</span>}
+              </button>
+              <Markdown content={withLineBreaks(comment.body)} className="text-sm leading-relaxed" />
+              <div className="-mb-1 -ml-2 flex gap-0.5"><Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground" disabled={busy || !!body.trim()} aria-label={`Edit comment on ${comment.file}:${comment.line}`} onClick={() => openComposer(comment, false)}><Icon name="Edit" className="size-3.5" aria-hidden />Edit</Button><Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground hover:text-destructive-text" disabled={busy} aria-label={`Remove comment on ${comment.file}:${comment.line}`} onClick={() => void removeComment(comment)}><Icon name="Trash2" className="size-3.5" aria-hidden />Remove</Button></div>
+            </li>; })}</ul> : !showComposer && <div className="flex flex-col items-center gap-2 rounded-lg border border-dashed border-border px-4 py-6 text-center"><Icon name="MessageSquarePlus" className="size-5 text-subtle-foreground" aria-hidden /><p className="text-sm leading-relaxed text-muted-foreground">Select a line in the diff or add a comment here.</p></div>}
             {showComposer && (inline ? <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
               <span className="min-w-0 flex-1 break-words">{asking ? `Writing to the agent about ${file}:${line} in the diff.` : `Writing a comment on ${file}:${line} in the diff.`}</span>
               <Button variant="ghost" size="sm" onClick={() => onShowComment?.({ file, line: Number(line), side })}>Show in diff</Button>
@@ -348,15 +364,15 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
             </div>)}
           </div>
           <div className="space-y-3 border-t border-border p-3">
-            <Button variant="ghost" size="sm" aria-expanded={showNotes} onClick={() => setShowNotes((value) => !value)}><Icon name={showNotes ? "ChevronDown" : "Plus"} className="size-4" aria-hidden /> Review summary</Button>
+            <Button variant="ghost" size="sm" className="-ml-2 text-muted-foreground" aria-expanded={showNotes} onClick={() => setShowNotes((value) => !value)}><Icon name="ChevronDown" className={cn("size-4 transition-transform duration-150", !showNotes && "-rotate-90")} aria-hidden /> Review summary</Button>
             {showNotes ? <label className="block space-y-2"><span className="text-xs text-muted-foreground">{isLocal ? "Saved with your local draft." : "Included with your GitHub review."}</span><Textarea aria-label="Review summary" disabled={busy} value={draft.body} onChange={(event) => updateSummary({ body: event.target.value })} onBlur={() => void flush().catch(() => {})} placeholder={isLocal ? "Summary of this review" : "What should the author know overall?"} /></label> : draft.body.trim() && <p className="line-clamp-3 whitespace-pre-wrap text-sm text-muted-foreground">{draft.body}</p>}
           </div>
           <div className="space-y-3 border-t border-border p-3">
             {!isLocal && <>
-              <div role="group" aria-label="Review verdict" className="flex max-w-full flex-wrap items-center gap-1 rounded-md border border-border p-1">
-                {([["APPROVE", "Approve"], ["COMMENT", "Comment"], ["REQUEST_CHANGES", "Request changes"]] as const).map(([verdict, label]) => <Button key={verdict} type="button" variant="ghost" size="sm" disabled={busy} aria-pressed={draft.verdict === verdict} onClick={() => { updateSummary({ verdict }); if (verdict === "REQUEST_CHANGES") setShowNotes(true); }}>{label}</Button>)}
+              <div role="group" aria-label="Review verdict" className="flex max-w-full flex-col gap-0.5 rounded-lg bg-muted/40 p-1 ring-1 ring-inset ring-border">
+                {([["APPROVE", "Approve", "Check", "aria-pressed:bg-success/15 aria-pressed:text-diff-added aria-pressed:ring-success/30 aria-pressed:hover:bg-success/20"], ["COMMENT", "Comment", "MessageSquare", "aria-pressed:bg-primary/15 aria-pressed:text-primary aria-pressed:ring-primary/30 aria-pressed:hover:bg-primary/20"], ["REQUEST_CHANGES", "Request changes", "FileDiff", "aria-pressed:bg-warning/15 aria-pressed:text-warning-text aria-pressed:ring-warning/30 aria-pressed:hover:bg-warning/20"]] as const).map(([verdict, label, icon, pressed]) => <Button key={verdict} type="button" variant="ghost" size="sm" disabled={busy} aria-pressed={draft.verdict === verdict} className={cn("w-full justify-start gap-2 px-2.5 text-muted-foreground ring-1 ring-inset ring-transparent aria-pressed:shadow-xs", pressed)} onClick={() => { updateSummary({ verdict }); if (verdict === "REQUEST_CHANGES") setShowNotes(true); }}><Icon name={icon} className="size-3.5" aria-hidden />{label}</Button>)}
               </div>
-              <Button className="w-full" disabled={busy || !hasReview || !!body.trim()} onClick={() => void submit()}>{busy ? "Saving…" : "Submit to GitHub"}</Button>
+              <Button className="w-full gap-2" disabled={busy || !hasReview || !!body.trim()} onClick={() => void submit()}>{busy ? <Icon name="Loading" className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <Icon name="Github" className="size-4" aria-hidden />}{busy ? "Saving…" : "Submit to GitHub"}</Button>
             </>}
             <p className="text-xs leading-relaxed text-muted-foreground">{isLocal ? "Local review. Comments and notes stay in this BB installation." : body.trim() ? asking ? "Send or cancel your message to the agent before submitting." : "Add the comment you’re writing to the draft before submitting." : "Drafts stay in BB until you submit."}</p>
           </div>

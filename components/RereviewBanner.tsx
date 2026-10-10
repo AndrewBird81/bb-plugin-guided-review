@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
+import { Badge } from "./ui/badge";
+import { Icon } from "./ui/icon";
 
 export const RereviewBanner = memo(function RereviewBanner({ targetKey }: { targetKey: string }) {
   const rpc = useRpc<typeof rpcContract>();
@@ -47,20 +49,16 @@ export const RereviewBanner = memo(function RereviewBanner({ targetKey }: { targ
     }
   }
 
-  // Idle: a bare small/ghost button tucked under the header — no band, no
-  // border. Stale: a slim one-line strip with the nudge text alongside it.
+  // Sits at the end of the review's title row. New commits add a pill and
+  // promote the button, so the nudge reads without a band of its own.
   return (
-    <div
-      className={cn(
-        "flex items-center gap-2 px-3 text-xs",
-        hasNewCommits ? "justify-between border-t border-border bg-muted py-1.5" : "justify-end py-1",
-      )}
-    >
-      {hasNewCommits && <p className="text-foreground">New commits on this PR since the guide was built.</p>}
-      <Button variant="ghost" size="sm" className="h-6 px-2" disabled={busy} onClick={reReview}>
+    <span className="inline-flex items-center gap-2">
+      {hasNewCommits && <Badge tone="primary" icon={<Icon name="GitCommit" aria-hidden />} title="New commits on this PR since the guide was built.">New commits on this PR</Badge>}
+      <Button variant={hasNewCommits ? "soft" : "ghost"} size="sm" className={cn("h-7 gap-1.5 px-2", !hasNewCommits && "text-muted-foreground")} disabled={busy} onClick={reReview}>
+        <Icon name="ArrowReloadHorizontal" className={cn("size-3.5", busy && "animate-spin motion-reduce:animate-none")} aria-hidden />
         {busy ? "Re-reviewing…" : "Re-review"}
       </Button>
-    </div>
+    </span>
   );
 });
 RereviewBanner.displayName = "RereviewBanner";

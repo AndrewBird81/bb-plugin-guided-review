@@ -18,6 +18,9 @@ import { RereviewBanner } from "./RereviewBanner";
 import { ThreadsPanel } from "./ThreadsPanel";
 import type { DockInjection } from "./AgentDock";
 import { ReviewSkeleton, ReviewError } from "./ReviewSkeleton";
+import { kindLook } from "./ReviewStatus";
+import { IconTile } from "./ui/icon-tile";
+import { Hint } from "./ui/hint";
 import { ReviewActions } from "./ReviewActions";
 import { defaultPreferences } from "../lib/review-preferences";
 
@@ -376,35 +379,36 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
       className="@container/review flex h-full min-h-0 min-w-0 flex-col bg-background"
       style={{ backgroundColor: "rgb(from var(--background) r g b / 1)" }}
     >
-      {loadError && <div role="alert" className="flex flex-wrap items-center gap-3 border-b border-border p-3 text-sm text-destructive"><span>{loadError}</span><Button variant="outline" size="sm" onClick={() => void load()}>Try again</Button></div>}
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1"><Button variant="ghost" size="sm" onClick={() => navigate.toPluginPanel("review")}><Icon name="ArrowRight" className="size-4 rotate-180" aria-hidden /> All reviews</Button><div className="ml-auto flex flex-wrap gap-1"><Button variant="ghost" size="sm" aria-label="Ask the review agent" onClick={() => setInjection({ context: { file: currentFile, chapterId: activeId }, nonce: Date.now() })}><Icon name="AiContentGenerator01" className="size-4" aria-hidden /> Ask assistant</Button><Button variant="ghost" size="sm" onClick={async () => { if (document.fullscreenElement) await document.exitFullscreen(); navigate.toPluginPanel("review", { subPath: `settings/${targetKey}` }); }}><Icon name="Settings" className="size-4" aria-hidden /> Settings</Button><ReviewActions review={review} className="size-8" onChanged={() => void load()} onDeleted={() => { if (document.fullscreenElement) void document.exitFullscreen().catch(() => {}); navigate.toPluginPanel("review"); }} /></div></div>
+      {loadError && <div role="alert" className="flex flex-wrap items-center gap-3 border-b border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive-text"><Icon name="AlertCircle" className="size-4 shrink-0" aria-hidden /><span className="min-w-0 flex-1">{loadError}</span><Button variant="outline" size="sm" onClick={() => void load()}>Try again</Button></div>}
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-2 py-1"><Button variant="ghost" size="sm" className="gap-1.5 px-2 text-muted-foreground" onClick={() => navigate.toPluginPanel("review")}><Icon name="ChevronLeft" className="size-4" aria-hidden /> All reviews</Button><div className="ml-auto flex flex-wrap items-center gap-1"><Button variant="ghost" size="sm" aria-label="Ask the review agent" className="text-muted-foreground" onClick={() => setInjection({ context: { file: currentFile, chapterId: activeId }, nonce: Date.now() })}><Icon name="Sparkles" className="size-4 text-(--ansi-13)" aria-hidden /> Ask assistant</Button><Button variant="ghost" size="sm" className="text-muted-foreground" onClick={async () => { if (document.fullscreenElement) await document.exitFullscreen(); navigate.toPluginPanel("review", { subPath: `settings/${targetKey}` }); }}><Icon name="Settings" className="size-4" aria-hidden /> Settings</Button><ReviewActions review={review} className="size-8" onChanged={() => void load()} onDeleted={() => { if (document.fullscreenElement) void document.exitFullscreen().catch(() => {}); navigate.toPluginPanel("review"); }} /></div></div>
       {/* Header — full when reviewing normally, slim in focus mode. */}
       {focus ? (
-        <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-          <Icon name="GitPullRequest" className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+        <div className="flex flex-wrap items-center gap-2.5 border-b border-border px-3 py-2">
+          <IconTile {...kindLook(review ?? { targetKey })} className="size-6 rounded-md" iconClassName="size-3.5" />
           <span className="flex min-w-0 flex-1 text-sm font-medium text-foreground">
             <ReviewTitleLink url={review?.url}>{review?.title ?? guide.title ?? targetKey}</ReviewTitleLink>
           </span>
-          {generatingReplacement && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">Regenerating the guide. Your previous diff and unsaved edits remain visible.</p>}
+          {generatingReplacement && <p role="status" className="flex items-center gap-1.5 text-xs text-warning-text"><Icon name="Loading" className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />Regenerating the guide. Your previous diff and unsaved edits remain visible.</p>}
           {!review?.archivedAt && <RereviewBanner targetKey={targetKey} />}
         </div>
       ) : (
         <div className="border-b border-border">
-          <div className="p-3">
-            <ReviewHeader review={review} checks={checks} intent={guide.intent} />
+          <div className="px-4 pb-3.5 pt-3">
+            <ReviewHeader review={review} checks={checks} intent={guide.intent} trailing={!review?.archivedAt && <RereviewBanner targetKey={targetKey} />} />
           </div>
-          {generatingReplacement && <p role="status" className="px-3 py-2 text-xs text-muted-foreground">Regenerating the guide. Your previous diff and unsaved edits remain visible.</p>}
-          {!review?.archivedAt && <RereviewBanner targetKey={targetKey} />}
+          {generatingReplacement && <p role="status" className="flex items-center gap-2 border-t border-warning/20 bg-warning/10 px-4 py-2 text-xs text-warning-text"><Icon name="Loading" className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />Regenerating the guide. Your previous diff and unsaved edits remain visible.</p>}
         </div>
       )}
       {repoAccess && !repoAccess.accessible && (
-        <p className="border-b border-border px-3 py-1 text-xs text-destructive">
-          Active GitHub account {repoAccess.account ? `@${repoAccess.account}` : ""} can't access{" "}
-          {repoAccess.repo ?? "this repo"} — switch account in the review list.
+        <p className="flex items-center gap-2 border-b border-destructive/20 bg-destructive/10 px-4 py-1.5 text-xs text-destructive-text">
+          <Icon name="Lock" className="size-3.5 shrink-0" aria-hidden />
+          <span>Active GitHub account {repoAccess.account ? `@${repoAccess.account}` : ""} can't access{" "}
+          {repoAccess.repo ?? "this repo"} — switch account in the review list.</span>
         </p>
       )}
       {review?.status === "error" && (
-        <p className="border-b border-border px-3 py-1 text-xs text-destructive">
+        <p className="flex items-center gap-2 border-b border-destructive/20 bg-destructive/10 px-4 py-1.5 text-xs text-destructive-text">
+          <Icon name="AlertTriangle" className="size-3.5 shrink-0" aria-hidden />
           Re-review failed — showing the previous guide. Try again.
         </p>
       )}
@@ -415,7 +419,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         {(compact ? mobileChapters : !sidebarCollapsed) && (
           <>
             <aside
-              className="max-h-[40vh] shrink-0 overflow-y-auto border-b border-border p-2 md:max-h-none md:border-b-0 md:border-r"
+              className="max-h-[40vh] shrink-0 overflow-y-auto border-b border-border bg-surface-raised p-2 md:max-h-none md:border-b-0"
               style={{ width: compact ? "100%" : sidebarWidth }}
             >
               <ChapterNav
@@ -424,6 +428,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                 onSelect={(id) => { setActiveId(id); setMobileChapters(false); }}
                 views={views}
                 onSelectFile={onSelectFile}
+                currentFile={currentFile}
               />
             </aside>
             {!compact && <div
@@ -440,87 +445,84 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
               aria-orientation="vertical"
               aria-label="Resize sidebar"
               onPointerDown={startSidebarResize}
-              className="w-1 shrink-0 cursor-col-resize bg-border/40 hover:bg-foreground/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
+              className="group/sep relative w-px shrink-0 cursor-col-resize bg-border before:absolute before:inset-y-0 before:-left-1 before:-right-1 before:content-[''] after:absolute after:inset-y-0 after:left-1/2 after:w-0.5 after:-translate-x-1/2 after:bg-primary/70 after:opacity-0 after:transition-opacity after:content-[''] hover:after:opacity-100 focus-visible:outline-none focus-visible:after:w-1 focus-visible:after:bg-primary focus-visible:after:opacity-100"
             />}
           </>
         )}
         <main className="flex min-w-0 flex-1 flex-col overflow-y-auto">
-          <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5">
             <Button
               variant="ghost"
               size="sm"
               aria-label={(compact ? !mobileChapters : sidebarCollapsed) ? "Show chapters" : "Hide chapters"}
               aria-pressed={compact ? mobileChapters : !sidebarCollapsed}
-              className="h-9 md:h-7 px-1.5"
+              className="h-9 px-1.5 text-muted-foreground aria-pressed:text-primary md:h-7"
               onClick={() => compact ? setMobileChapters((value) => !value) : setSidebarCollapsed((value) => !value)}
             >
-              <Icon name="AlignLeft" className="size-4" aria-hidden />
+              <Icon name="PanelLeft" className="size-4" aria-hidden />
               {compact && "Chapters"}
             </Button>
-            <div className="inline-flex items-center gap-0.5 rounded-md border border-border p-0.5">
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-pressed={view === "diff"}
-                className={cn("h-9 md:h-7 px-2 text-xs", view === "diff" && "bg-muted")}
-                onClick={() => setView("diff")}
-              >
-                Diff
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-pressed={view === "threads"}
-                className={cn("h-9 md:h-7 px-2 text-xs", view === "threads" && "bg-muted")}
-                onClick={() => setView("threads")}
-              >
-                Threads
-              </Button>
+            <div className="inline-flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5 ring-1 ring-inset ring-border">
+              {(["diff", "threads"] as const).map((value) => (
+                <Button
+                  key={value}
+                  variant="ghost"
+                  size="sm"
+                  aria-pressed={view === value}
+                  className="h-9 gap-1.5 rounded-md px-2.5 text-xs text-muted-foreground aria-pressed:shadow-xs md:h-7"
+                  onClick={() => setView(value)}
+                >
+                  <Icon name={value === "diff" ? "FileDiff" : "MessageSquare"} className="size-3.5" aria-hidden />
+                  {value === "diff" ? "Diff" : "Threads"}
+                </Button>
+              ))}
             </div>
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground md:ml-auto">
               {view === "diff" && activeFiles.length > 0 && (
                 <>
-                  <span>
-                    {viewedCount} / {activeFiles.length} viewed
-                  </span>
+                  <span className={cn("tabular-nums", viewedCount === activeFiles.length && "text-diff-added")}>{viewedCount} / {activeFiles.length} viewed</span>
                   <Button
                     variant="ghost"
                     size="sm"
-                    className="h-9 md:h-7 px-2 text-xs"
+                    className="h-9 px-2 text-xs md:h-7"
                     disabled={viewedCount === activeFiles.length}
                     onClick={markAllViewed}
                   >
-                    <Icon name="Check" className="size-3.5" aria-hidden />
+                    <Icon name="CircleCheck" className="size-3.5" aria-hidden />
                     Mark all
                   </Button>
                   <span className="h-4 w-px bg-border" />
                 </>
               )}
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label="Focus mode"
-                aria-pressed={focus}
-                className={cn("h-9 md:h-7 px-2 text-xs", focus && "bg-muted")}
-                onClick={() => setFocus((f) => !f)}
-              >
-                <Icon name="Minimize2" className="size-3.5" aria-hidden />
-                Focus
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
-                aria-pressed={isFullscreen}
-                className="h-9 md:h-7 px-2 text-xs"
-                onClick={toggleFullscreen}
-              >
-                <Icon name={isFullscreen ? "Minimize2" : "Maximize2"} className="size-3.5" aria-hidden />
-                {isFullscreen ? "Exit" : "Full screen"}
-              </Button>
+              <Hint label="Focus mode" container={rootEl}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label="Focus mode"
+                  aria-pressed={focus}
+                  className="h-9 px-2 text-xs aria-pressed:text-primary md:h-7"
+                  onClick={() => setFocus((f) => !f)}
+                >
+                  <Icon name="Minimize2" className="size-3.5" aria-hidden />
+                  <span className="hidden @min-[1280px]/review:inline">Focus</span>
+                </Button>
+              </Hint>
+              <Hint label={isFullscreen ? "Exit full screen" : "Full screen"} container={rootEl}>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
+                  aria-pressed={isFullscreen}
+                  className="h-9 px-2 text-xs aria-pressed:text-primary md:h-7"
+                  onClick={toggleFullscreen}
+                >
+                  <Icon name={isFullscreen ? "Minimize2" : "Maximize2"} className="size-3.5" aria-hidden />
+                  <span className="hidden @min-[1280px]/review:inline">{isFullscreen ? "Exit" : "Full screen"}</span>
+                </Button>
+              </Hint>
             </div>
           </div>
-          <div ref={scrollBox} onScroll={onScroll} onMouseUp={onMouseUp} className="min-h-0 flex-1 overflow-y-auto p-4">
+          <div ref={scrollBox} onScroll={onScroll} onMouseUp={onMouseUp} className="min-h-0 flex-1 overflow-y-auto px-4 pb-6 pt-4">
             {view === "diff" ? (
               <DiffViewer
                 diffLayout={diffLayout}
@@ -544,29 +546,29 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
 
       {/* Line-selection action bar — GitHub-style: pick lines, then act. */}
       {lineSel && (
-        <div className="fixed bottom-24 left-1/2 z-[62] flex w-max max-w-[calc(100vw-24px)] -translate-x-1/2 flex-wrap items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 text-xs shadow-2xl">
-          <span className="text-muted-foreground">
+        <div className="fixed bottom-24 left-1/2 z-[62] flex w-max max-w-[calc(100vw-24px)] -translate-x-1/2 flex-wrap items-center gap-1.5 rounded-xl border border-border bg-popover px-2 py-1.5 text-xs shadow-2xl ring-1 ring-primary/10">
+          <span className="flex items-center gap-1.5 px-1 font-mono text-[11px] text-muted-foreground">
+            <Icon name="File" className="size-3.5" aria-hidden />
             {lineSel.file.split("/").pop()}
-            <span className="text-foreground">
-              {" "}
+            <span className="rounded bg-primary/10 px-1 text-primary">
               L{lineSel.range.start}
               {lineSel.range.end !== lineSel.range.start ? `–${lineSel.range.end}` : ""}
             </span>
           </span>
           <span className="h-4 w-px bg-border" />
-          <Button size="sm" variant="ghost" className="h-9 md:h-7 gap-1 px-2 text-xs" onClick={() => commentOnLines()}>
-            <Icon name="BubbleChatQuestion" className="size-3.5" aria-hidden />
+          <Button size="sm" variant="ghost" className="h-9 gap-1.5 px-2 text-xs md:h-7" onClick={() => commentOnLines()}>
+            <Icon name="MessageSquarePlus" className="size-3.5 text-primary" aria-hidden />
             Add comment
           </Button>
-          <Button size="sm" variant="ghost" className="h-9 md:h-7 gap-1 px-2 text-xs" onClick={askAboutLines}>
-            <Icon name="AiContentGenerator01" className="size-3.5" aria-hidden />
+          <Button size="sm" variant="ghost" className="h-9 gap-1.5 px-2 text-xs md:h-7" onClick={askAboutLines}>
+            <Icon name="Sparkles" className="size-3.5 text-(--ansi-13)" aria-hidden />
             Ask agent
           </Button>
           <button
             type="button"
             aria-label="Clear selection"
             onClick={() => setLineSel(null)}
-            className="rounded p-0.5 text-muted-foreground hover:bg-state-hover hover:text-foreground"
+            className="rounded-md p-1 text-muted-foreground hover:bg-state-hover hover:text-foreground"
           >
             <Icon name="X" className="size-3.5" aria-hidden />
           </button>
@@ -577,14 +579,13 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
         <button
           type="button"
           onClick={askAboutSelection}
-          className="fixed z-[62] flex -translate-x-1/2 -translate-y-full items-center gap-1 rounded-md border border-border bg-foreground px-2 py-1 text-xs font-medium text-background shadow-lg"
+          className="fixed z-[62] flex -translate-x-1/2 -translate-y-full items-center gap-1.5 rounded-lg bg-(--ansi-13) px-2.5 py-1 text-xs font-semibold text-background shadow-lg hover:brightness-110"
           style={{ left: sel.x, top: sel.y - 6 }}
         >
-          <Icon name="AiContentGenerator01" className="size-3.5" aria-hidden />
+          <Icon name="Sparkles" className="size-3.5" aria-hidden />
           Ask agent about this
         </button>
       )}
-
 
     </div>
   );

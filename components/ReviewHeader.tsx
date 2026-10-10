@@ -1,36 +1,34 @@
 import { memo, useState, type ReactNode } from "react";
-import { UrlLink } from "@get-bb/plugin-sdk/app";
+import { Markdown, UrlLink } from "@get-bb/plugin-sdk/app";
 import { reviewState } from "../lib/review-state";
 import { cn } from "../lib/utils";
 import { Icon } from "./ui/icon";
+import { Badge } from "./ui/badge";
+import { Avatar } from "./ui/avatar";
+import { StatusBadge, kindLook } from "./ReviewStatus";
+import { IconTile } from "./ui/icon-tile";
+import { InlineCode } from "./ui/inline-code";
 
 type ChecksSummary = { bucket: string; checks: any[] } | null | undefined;
 
-/** Small one-line CI status pill derived from the checks summary. */
+/** CI status as a pill: green passing, red failing, amber pending. Hovering lists the checks. */
 function CiBadge({ checks }: { checks: ChecksSummary }) {
   if (!checks || checks.bucket === "none") return null;
-  const pillClass = "inline-flex items-center rounded-full border px-1.5 py-0 text-[10px] font-medium leading-4";
+  const title = checks.checks.map((c: any) => `${c.name}: ${c.bucket}`).join("\n");
   if (checks.bucket === "fail") {
     const n = checks.checks.filter((c: any) => c.bucket === "fail").length;
-    return (
-      <span className={cn(pillClass, "border-destructive text-destructive")} title="CI: failing">
-        ✕ {n}
-      </span>
-    );
+    return <Badge tone="danger" title={title} icon={<Icon name="X" aria-hidden />}>{n} failing</Badge>;
   }
   if (checks.bucket === "pending") {
     const n = checks.checks.filter((c: any) => c.bucket === "pending").length;
-    return (
-      <span className={cn(pillClass, "border-border text-muted-foreground")} title="CI: pending">
-        ● {n} pending
-      </span>
-    );
+    return <Badge tone="warning" title={title} dot pulse>{n} pending</Badge>;
   }
-  return (
-    <span className={cn(pillClass, "border-border text-muted-foreground")} title="CI: passing">
-      ✓ passing
-    </span>
-  );
+  return <Badge tone="success" title={title} icon={<Icon name="Check" aria-hidden />}>Checks passing</Badge>;
+}
+
+/** A branch name, GitHub-style. */
+export function BranchChip({ children, className }: { children: ReactNode; className?: string }) {
+  return <span className={cn("max-w-56 truncate rounded-md bg-primary/10 px-1.5 py-0.5 font-mono text-[11px] leading-4 text-primary", className)}>{children}</span>;
 }
 
 /** Review title that opens its GitHub PR when one is known; place in a flex container. */
@@ -38,8 +36,8 @@ export function ReviewTitleLink({ url, children }: { url?: string; children: Rea
   if (!url) return <span className="truncate">{children}</span>;
   return (
     <UrlLink href={url} title="Open on GitHub" className="group flex min-w-0 items-center gap-1.5 rounded-sm">
-      <span className="truncate decoration-muted-foreground/50 underline-offset-4 group-hover:underline">{children}</span>
-      <Icon name="ArrowUpRight" className="size-[1em] shrink-0 text-muted-foreground group-hover:text-foreground" aria-hidden />
+      <span className="truncate decoration-primary/50 underline-offset-4 group-hover:underline">{children}</span>
+      <Icon name="ArrowUpRight" className="size-[1em] shrink-0 text-muted-foreground transition-colors group-hover:text-primary" aria-hidden />
     </UrlLink>
   );
 }
@@ -50,44 +48,60 @@ export const ReviewHeader = memo(function ReviewHeader({
   review,
   checks,
   intent,
+  trailing,
 }: {
   review: any;
   checks?: ChecksSummary;
   intent?: string;
+  /** Actions at the end of the title row, such as Re-review. */
+  trailing?: ReactNode;
 }) {
   const [expanded, setExpanded] = useState(false);
   if (!review) return null;
   const showIntentToggle = !!intent && intent.length > INTENT_TOGGLE_THRESHOLD;
+  const kind = kindLook(review);
+  const state = reviewState(review);
 
   return (
-    <header className="space-y-1">
-      <div className="flex items-center gap-2">
-        <h2 className="flex min-w-0 flex-1 text-base font-semibold text-foreground">
-          <ReviewTitleLink url={review.url}>{review.title ?? review.gitRef ?? review.targetKey}</ReviewTitleLink>
-        </h2>
-        <div className="flex shrink-0 items-center gap-2">
-          <CiBadge checks={checks} />
-          <span className="text-xs font-medium text-muted-foreground">{reviewState(review).label === "Ready" ? null : reviewState(review).label}</span>
+    <header className="flex items-start gap-3">
+      <IconTile tone={kind.tone} icon={kind.icon} className="mt-0.5 hidden size-9 @min-[640px]/review:flex" />
+      <div className="min-w-0 flex-1 space-y-2">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+          <h2 className="flex min-w-0 flex-1 basis-80 text-base font-semibold leading-snug text-foreground @min-[640px]/review:text-lg">
+            <ReviewTitleLink url={review.url}><InlineCode text={review.title ?? review.gitRef ?? review.targetKey} /></ReviewTitleLink>
+          </h2>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <CiBadge checks={checks} />
+            {state.label !== "Ready" && <StatusBadge review={review} />}
+            {trailing}
+          </div>
         </div>
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-muted-foreground">
+          {review.author && <span className="inline-flex items-center gap-1.5"><Avatar login={review.author} size={18} /><span className="text-foreground/90">@{review.author}</span></span>}
+          {review.repo && <span className="font-mono text-[11px]">{review.repo}{review.number ? <span className="text-subtle-foreground"> #{review.number}</span> : null}</span>}
+          {review.base && review.head
+            ? <span className="inline-flex min-w-0 items-center gap-1"><BranchChip>{review.base}</BranchChip><Icon name="ArrowRight" className="size-3 shrink-0 rotate-180 text-subtle-foreground" aria-hidden /><BranchChip>{review.head}</BranchChip></span>
+            : review.gitRef && <BranchChip>{review.gitRef}</BranchChip>}
+        </div>
+        {intent && (
+          <div className="max-w-[80ch] border-l-2 border-primary/40 pl-3">
+            <div className={cn("relative text-foreground/90", !expanded && showIntentToggle && "max-h-[3.4rem] overflow-hidden [mask-image:linear-gradient(to_bottom,black_2.85rem,transparent)]")}>
+              <Markdown content={intent} className="text-sm leading-relaxed" />
+            </div>
+            {showIntentToggle && (
+              <button
+                type="button"
+                className="mt-0.5 inline-flex items-center gap-0.5 rounded-sm text-xs text-muted-foreground hover:text-foreground"
+                aria-expanded={expanded}
+                onClick={() => setExpanded((e) => !e)}
+              >
+                {expanded ? "less" : "more"}
+                <Icon name={expanded ? "ChevronUp" : "ChevronDown"} className="size-3" aria-hidden />
+              </button>
+            )}
+          </div>
+        )}
       </div>
-      <p className="text-xs text-muted-foreground">
-        {review.author ? `@${review.author} · ` : ""}
-        {review.base && review.head ? `${review.base} ← ${review.head}` : review.gitRef}
-      </p>
-      {intent && (
-        <div>
-          <p className={cn("text-sm text-foreground", !expanded && "line-clamp-2")}>{intent}</p>
-          {showIntentToggle && (
-            <button
-              type="button"
-              className="text-xs text-muted-foreground hover:text-foreground hover:underline"
-              onClick={() => setExpanded((e) => !e)}
-            >
-              {expanded ? "less" : "more"}
-            </button>
-          )}
-        </div>
-      )}
     </header>
   );
 });

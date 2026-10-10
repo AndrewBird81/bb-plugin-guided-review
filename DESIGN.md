@@ -1,6 +1,6 @@
 ---
 name: Guided Review — BB-native Operate surface
-description: Existing BB theme and controls applied to the review list and chapter workspace.
+description: BB theme tokens, with one semantic tone per status, applied to the review list and chapter workspace.
 colors:
   background: "var(--background)"
   foreground: "var(--foreground)"
@@ -13,14 +13,22 @@ colors:
   destructive: "var(--destructive)"
   state-hover: "var(--state-hover)"
   state-active: "var(--state-active)"
+  primary: "var(--primary)"
+  success: "var(--success)"
+  success-text: "var(--diff-added)"
+  warning: "var(--warning)"
+  warning-text: "var(--warning-text)"
+  danger-text: "var(--destructive-text)"
+  merged: "var(--pr-merged)"
+  agent: "var(--ansi-13)"
 rounded:
   control: "calc(var(--radius) - 2px)"
   review-card: "calc(var(--radius) + 4px)"
   start-panel: "var(--radius-2xl)"
 components:
   primary-button:
-    backgroundColor: "{colors.foreground}"
-    textColor: "{colors.background}"
+    backgroundColor: "{colors.primary}"
+    textColor: "var(--primary-foreground)"
     rounded: "{rounded.control}"
   review-card:
     backgroundColor: "{colors.card}"
@@ -36,41 +44,42 @@ This records the incumbent **Operate** surface inside BB. [app.tsx](app.tsx) reg
 
 ## Colors
 
-The frontmatter retains live host token references so light and dark themes remain authoritative. Background and card surfaces, muted supporting text, borders, focus rings, hover/active fills, and destructive feedback all use those roles. Small PR/local-type marks and status badges add localized violet, sky, amber, emerald, and destructive treatments with explicit dark variants. Status text and icons accompany color.
+The frontmatter retains live host token references so light and dark themes remain authoritative; no palette colors or `dark:` variants are used. Neutral surfaces, text tiers, borders, and hover/active fills carry the layout. Color marks meaning, in small doses, through one tone per status ([Badge](components/ui/badge.tsx)): primary for the main action, focus, the open chapter, and "ready"; success for approved, passing, and viewed; warning for in progress, pending, medium risk, and changes requested; danger for failures, closed PRs, and high risk; merged for merged PRs; agent (the terminal's bright magenta) for anything the assistant wrote or does. Fills are 10–15% tints; text uses the theme's contrast-safe text roles (`diff-added`, `warning-text`, `destructive-text`). Status text and icons accompany color.
 
 [DiffViewer](components/DiffViewer.tsx) uses BB’s light/dark code-theme names when supplied and receives the current mode from the SDK. Preserve that connection rather than hardcoding a syntax palette.
 
 ## Typography
 
-Interface text inherits the BB sans family; file paths, line references, and CLI examples use monospace. The list title uses the host extra-large scale, increasing one step on larger screens. Review titles and controls predominantly use the small scale, with extra-small metadata and compact 10–11px badges. Headings rely on medium/semibold weight and modest size changes. Keep explanations readable and reserve truncation for titles and paths with constrained space.
+Interface text inherits the BB sans family; file paths, repositories, branches, line references, and CLI examples use monospace, with a path's directory dimmed so its file name leads. Agent-written text (the guide's intent, comments, discussions, and assistant answers) renders through BB's Markdown, as in chat; titles and chapter summaries render their `code` spans inline. The list title uses the host extra-large scale, increasing one step on larger screens. Review titles and controls predominantly use the small scale, with extra-small metadata and compact 10–11px badges. Headings rely on medium/semibold weight and modest size changes. Keep explanations readable and reserve truncation for titles and paths with constrained space.
 
 ## Layout
 
-The list fills the available panel width with 16px padding, increasing to 24px at the small breakpoint. Account context precedes the PR form and first-run disclosure. Saved reviews use full-width rows with aligned titles, repository metadata, state, one next action, and a trailing Review actions menu (Archive or Unarchive, Delete). Needs review, Reviewed, and Archive filters separate unfinished work, submitted verdicts, and merged, closed, or reviewer-archived reviews. There is no duplicate resume card. The input and primary action stack on narrow screens.
+The list is a centered column up to 1152px wide, with 16px padding, increasing to 24px at the small breakpoint. Account context precedes the PR form and first-run disclosure. Saved reviews sit in one bordered list whose header holds the filters and Refresh; each row has a PR-state tile (GitHub's open, merged, and closed colors), the title, repository, author avatar, and age, a status badge, the next action on hover, and a trailing Review actions menu (Archive or Unarchive, Delete). Needs review, Reviewed, and Archive filters separate unfinished work, submitted verdicts, and merged, closed, or reviewer-archived reviews. There is no duplicate resume card. The input and primary action stack on narrow screens.
 
 The workspace fills the panel’s height and width. Desktop chapters occupy a resizable sidebar, initially 288px and constrained to 200–560px, beside the flexible diff/thread pane. The separator supports pointer dragging and keyboard adjustment. Focus mode reduces header detail; fullscreen expands the workspace.
 
-At widths of 767px or less, chapters become a collapsible full-width section capped at 40vh, controls wrap, and diffs switch from split to unified. Long code scrolls within its file container. The draft tray remains independently scrollable with a 48vh maximum height.
+At widths of 767px or less, chapters become a collapsible full-width section capped at 40vh, controls wrap, and diffs switch from split to unified. Diffs are also unified whenever their pane is narrower than 720px, so neither side of a split clips its code. Long code scrolls within its file container. The draft tray remains independently scrollable with a 48vh maximum height.
 
 ## Elevation & Depth
 
-Thin host borders separate the header, chapters, toolbar, diff files, and draft tray. Review rows use a quiet hover fill; the floating review-agent window uses stronger elevation. Button fills respond immediately on hover and transition out over 150ms through the shared motion helper. Loading icons and the agent dock include reduced-motion handling.
+Thin host borders separate the header, chapters, toolbar, diff files, and draft tray. Cards (the review list, diff files, draft comments, settings sections) use the host card surface with a hairline shadow; the chapter sidebar and tool rail sit on the raised surface. Diff file headers stick to the top of the scrolling diff. Review rows use a quiet hover fill; the floating review-agent window uses stronger elevation. Button fills respond immediately on hover and transition out over 150ms through the shared motion helper. Loading icons and the agent dock include reduced-motion handling.
 
 ## Shapes
 
-Controls and diff frames use the host medium radius; review rows and the start form use spacing and thin separators instead of enclosing cards. Pills identify review state. Icons remain compact and secondary to the task labels.
+Controls use the host medium radius; cards and icon tiles use the large radius. Pills identify state, risk, CI, and file kind. A colored left edge says whose a comment is: primary for the reviewer's, agent for the assistant's. Icons remain compact and secondary to the task labels.
 
 ## Components
 
 - **Account and onboarding:** keep the title, compact GitHub account control, and Settings on one header line. Account switching and authentication guidance live in the account popover; Review help sits beside the CLI hint. At narrow widths, account and Settings retain accessible icon controls instead of wrapping.
-- **Review workspace:** chapters expose file summaries and risk labels; the toolbar switches Diff/Threads and controls viewed state, focus, and fullscreen. Viewed files collapse, while changed-file indicators preserve re-review context.
+- **Review workspace:** the header shows the PR's state tile, title link, CI and status pills, and Re-review on one line, then the author, repository, and branches, then the guide's intent (clamped, with more/less) beside a primary rule. Chapters are numbered steps on a path: each marker's ring fills green as its files are viewed, the open chapter is solid primary, and a finished one shows a check; a bar above them totals the review's viewed files. Chapters expose file summaries and risk labels; the toolbar switches Diff/Threads and controls viewed state, focus, and fullscreen. File headers show the path, file kind, draft-comment count, additions and deletions with BB's size bar, and a Viewed toggle that turns green. Viewed files collapse, while changed-file indicators preserve re-review context.
 - **Draft and agent:** a review panel sits beside the diff when the plugin has at least 1024px available, and below it otherwise. Draft comments and Reviewer notes are distinct views. Line comments also render in the diff under their lines, as compact cards with Edit and Remove; the gutter "+" or a line selection opens the comment box there, and only one comment is written at a time. Choosing a comment in the panel scrolls to its line, opening a collapsed file; file headers count their draft comments, and comments drafted against an older diff carry an Older diff badge. A line can also hold a discussion with the assistant, apart from its comment: Ask agent on a comment, in the comment box, or on selected lines sends the reviewer's message with the line's context to the review's conversation, and the assistant answers in the discussion or changes the comment there; its changes show in the discussion. The card says while it's waiting, and when the assistant finished without answering there. A comment the assistant removes leaves its discussion until the reviewer dismisses it; removing a comment removes its discussion. Discussions never reach GitHub, and submitting clears them. The public Review summary stays with the submission controls. Comments that agents add, edit, or delete change in an open draft as it happens. An agent's comment is labeled Added by agent until the reviewer edits it. Submit refuses comments the page hasn't shown. Reviewer notes never enter GitHub or assistant payloads and stay accessible for submitted/archived reviews. Approve, Comment, and Request changes are visible quick-selection buttons with a highlighted selection; Submit to GitHub remains explicit. A saved receipt replaces the empty submission form after sending. Merged and closed PRs retain their guide, conversation, and unsent drafts in Archive; local reviews show installation-local notes. The Ask agent tool shows the review's hidden BB thread with BB's own chat; file or selected-text context is quoted into its composer, as are selected lines once a review is archived, and the first message chooses the agent. Pop out moves the same chat into a draggable, resizable widget; Dock returns it to the panel. BB keeps the draft and any answer in progress across both moves. The thread stays hidden from the BB sidebar.
 - **Recovery:** loading skeletons reflect the workspace structure. Load and generation failures offer retry/back actions; draft-load failure pauses editing. Errors stay visible near the relevant action or in an alert/toast, and submission failures preserve the draft.
 
 ## Do's and Don'ts
 
 - Do reuse host tokens, shared controls, visible focus, and explicit loading/error states.
-- Do retain full-width panel use, responsive chapter access, and unified narrow-screen diffs.
+- Do retain full-width workspace use, responsive chapter access, and unified narrow diffs.
+- Do keep color semantic: one tone per meaning, as tints and small marks, never as large fills.
 - Do make server account scope and GitHub write actions clear where users act.
 - Don’t imply separate team accounts, remote-machine checkout support, or shared review storage beyond the actual BB installation.
 

@@ -6,6 +6,9 @@ import { splitPatchByFile } from "../src/patch";
 import { sameLocation, type CommentLocation } from "../src/draft";
 import { cn } from "../lib/utils";
 import { Icon } from "./ui/icon";
+import { Badge } from "./ui/badge";
+import { DiffStat } from "./ui/diff-stat";
+import { FilePath } from "./ui/file-path";
 import { FileTag } from "./FileTag";
 import { useMediaQuery } from "./ui/hooks/use-media-query";
 import { InlineDraftContext, InlineLocation, locationKey } from "./InlineDraft";
@@ -38,6 +41,9 @@ function diffStats(text: string): { add: number; del: number } {
 }
 
 const annotationSide = (side: "LEFT" | "RIGHT"): AnnotationSide => (side === "LEFT" ? "deletions" : "additions");
+
+/** Below this width the diff shows one column, whatever the reading layout. */
+const UNIFIED_BELOW = 720;
 
 // Scrolls the review only vertically: scrollIntoView would also scroll the diff's code sideways.
 function scrollToCenter(el: HTMLElement, behavior: ScrollBehavior) {
@@ -72,6 +78,8 @@ const FileBody = memo(function FileBody({ path, fileDiff, darkTheme, lightTheme,
     ...(darkTheme && lightTheme ? { theme: { dark: darkTheme, light: lightTheme } } : {}),
     themeType: themeMode,
     diffStyle,
+    // The card's own header names the file, counts its changes, and marks it viewed.
+    disableFileHeader: true,
     // GitHub-style line picking: drag to select a range to comment on or ask
     // about, or use the gutter "+" to open a comment box at a line.
     // Uncontrolled — pierre paints the highlight.
@@ -129,6 +137,17 @@ export const DiffViewer = memo(function DiffViewer({
       }))
       .filter((f) => f.fileDiff);
   }, [patch, files]);
+
+  // Side-by-side needs room: squeezed between the chapters and the review panel, each side would clip its code.
+  const [narrow, setNarrow] = useState(false);
+  const hasFiles = perFile.length > 0;
+  useEffect(() => {
+    const el = root.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(([entry]) => setNarrow(entry.contentRect.width < UNIFIED_BELOW));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [hasFiles]);
 
   // Explicit collapse overrides; when unset a file follows its "viewed" flag.
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -189,11 +208,11 @@ export const DiffViewer = memo(function DiffViewer({
   }, [reveal]);
 
   if (perFile.length === 0) {
-    return <p className="text-sm text-muted-foreground">No changes in this chapter.</p>;
+    return <p className="rounded-lg border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">No changes in this chapter.</p>;
   }
 
   return (
-    <div ref={root} className="space-y-3">
+    <div ref={root} className="space-y-4">
       {perFile.map(({ path, stats, fileDiff }) => {
         const flags = views.get(path);
         const viewed = flags?.viewed ?? false;
@@ -207,46 +226,40 @@ export const DiffViewer = memo(function DiffViewer({
             ref={(el) => registerFileEl?.(path, el)}
             data-file={path}
             className={cn(
-              "overflow-hidden rounded-md border border-border",
-              viewed && "border-border/60 opacity-70",
+              // clip, not hidden: the header sticks to the scrolling review, not to this card.
+              "overflow-clip rounded-lg border border-border bg-card shadow-xs transition-opacity duration-150",
+              viewed && folded && "opacity-75 focus-within:opacity-100 hover:opacity-100",
             )}
           >
-            <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-2 py-1.5">
+            <div className={cn("sticky top-0 z-10 flex min-h-10 items-center gap-2 bg-[color-mix(in_oklab,var(--muted)_30%,var(--background))] px-2 py-1.5", !folded && "border-b border-border")}>
               <button
                 type="button"
                 aria-label={folded ? "Expand file" : "Collapse file"}
-                className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-state-hover hover:text-foreground"
+                className="shrink-0 rounded-md p-1 text-muted-foreground hover:bg-state-hover hover:text-foreground"
                 onClick={() => toggleCollapsed(path)}
               >
-                <Icon name={folded ? "ArrowRight" : "ArrowDown"} className="size-3.5" aria-hidden />
+                <Icon name="ChevronDown" className={cn("size-3.5 transition-transform duration-150", folded && "-rotate-90")} aria-hidden />
               </button>
-              <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground" title={path}>
-                {path}
-              </span>
+              <FilePath path={path} className="min-w-0 flex-1 text-xs" nameClassName="font-medium" />
               <FileTag file={path} />
-              <span className="shrink-0 font-mono text-[10px] text-emerald-600 dark:text-emerald-400">
-                +{stats.add}
-              </span>
-              <span className="shrink-0 font-mono text-[10px] text-rose-600 dark:text-rose-400">−{stats.del}</span>
               {commentCount > 0 && (
-                <span className="flex shrink-0 items-center gap-0.5 text-[10px] text-muted-foreground" title={commentLabel}>
+                <span className="flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-1.5 text-[11px] leading-5 text-primary" title={commentLabel}>
                   <Icon name="MessageSquare" className="size-3" aria-hidden />
                   <span aria-hidden>{commentCount}</span>
                   <span className="sr-only">{commentLabel}</span>
                 </span>
               )}
               {stale && (
-                <span
-                  className="shrink-0 rounded-full border border-amber-500/40 px-1.5 py-0 text-[10px] leading-4 text-amber-600 dark:text-amber-400"
-                  title="This file changed since you marked it viewed"
-                >
-                  changed
-                </span>
+                <Badge tone="warning" size="sm" title="This file changed since you marked it viewed">changed</Badge>
               )}
-              <label className="flex shrink-0 cursor-pointer items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground">
+              <DiffStat add={stats.add} del={stats.del} className="hidden @min-[700px]/review:inline-flex" />
+              <label className={cn(
+                "flex shrink-0 cursor-pointer items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] transition-colors",
+                viewed ? "border-success/30 bg-success/10 text-diff-added" : "border-border text-muted-foreground hover:border-input hover:text-foreground",
+              )}>
                 <input
                   type="checkbox"
-                  className="size-3.5 accent-foreground"
+                  className="size-3.5 accent-(--success)"
                   checked={viewed}
                   onChange={(e) => handleToggleViewed(path, e.target.checked)}
                 />
@@ -260,7 +273,7 @@ export const DiffViewer = memo(function DiffViewer({
                 darkTheme={theme?.dark}
                 lightTheme={theme?.light}
                 themeMode={themeMode}
-                diffStyle={compact ? "unified" : diffLayout}
+                diffStyle={compact || narrow ? "unified" : diffLayout}
                 annotations={annotations.get(path)?.list ?? []}
                 onLineSelected={onLineSelected}
                 onComment={draft?.editable ? draft.open : undefined}

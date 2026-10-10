@@ -5,6 +5,7 @@ import type { rpcContract } from "../src/rpc-contract";
 import { Button } from "./ui/button";
 import { Icon } from "./ui/icon";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Avatar } from "./ui/avatar";
 
 export const AccountBar = memo(function AccountBar() {
   const rpc = useRpc<typeof rpcContract>();
@@ -56,7 +57,7 @@ export const AccountBar = memo(function AccountBar() {
     <Popover>
       <PopoverTrigger asChild>
         <Button variant="ghost" size="sm" className="shrink-0 gap-1.5" aria-label={`GitHub account: ${label}`}>
-          <Icon name="Github" className="size-4" aria-hidden />
+          {active && !loading && !failed ? <Avatar login={active} size={18} /> : <Icon name="Github" className="size-4" aria-hidden />}
           <span className="hidden max-w-40 truncate @min-[520px]/review-list:inline">{label}</span>
           <Icon name="ChevronDown" className="size-3" aria-hidden />
         </Button>
@@ -66,13 +67,13 @@ export const AccountBar = memo(function AccountBar() {
           <p className="text-sm font-medium">GitHub account</p>
           <p className="text-xs leading-relaxed text-muted-foreground">Reviews are submitted using this BB server’s active account.</p>
         </div>
-        <p role="status" className="text-sm">{loading ? "Checking account…" : failed ? "Account check unavailable" : active ? `Signed in as @${active}` : "No account connected"}</p>
+        <p role="status" className="flex items-center gap-2 rounded-lg border border-border bg-muted/25 px-2.5 py-2 text-sm">{active && !loading && !failed ? <Avatar login={active} size={24} /> : <Icon name="Github" className="size-4 text-muted-foreground" aria-hidden />}{loading ? "Checking account…" : failed ? "Account check unavailable" : active ? `Signed in as @${active}` : "No account connected"}</p>
         {!loading && (failed || !active) && <Button variant="outline" size="sm" onClick={refetch}>Check again</Button>}
         {!loading && !active && <p className="text-xs leading-relaxed text-muted-foreground">Run <code className="font-mono">gh auth login</code> on the BB server to connect GitHub. Local git reviews work without GitHub.</p>}
         {accounts.some((account) => !account.active) && <div className="space-y-1 border-t border-border pt-2">
           {accounts.map((account) => <Button key={account.login} variant="ghost" size="sm" className="w-full justify-between" disabled={switching !== null || account.active} aria-label={account.active ? `Current account @${account.login}` : `Use @${account.login} on this BB server`} onClick={() => void switchTo(account.login)}>
-            <span className="truncate">{switching === account.login ? "Switching…" : `@${account.login}`}</span>
-            {account.active && <Icon name="Check" className="size-4" aria-hidden />}
+            <span className="flex min-w-0 items-center gap-2"><Avatar login={account.login} size={18} /><span className="truncate">{switching === account.login ? "Switching…" : `@${account.login}`}</span></span>
+            {account.active && <Icon name="Check" className="size-4 text-primary" aria-hidden />}
           </Button>)}
         </div>}
       </PopoverContent>

@@ -138,6 +138,10 @@ import {
   ZapIcon,
   ZoomInAreaIcon,
   ZoomOutAreaIcon,
+  SparklesIcon,
+  CheckmarkBadge01Icon,
+  GitCommitIcon,
+  Route01Icon,
 } from "@hugeicons/core-free-icons";
 import { cn } from "../../lib/utils";
 
@@ -407,6 +411,10 @@ const ICON_MAP = {
   LightbulbOff: LightbulbOffIcon,
   Square: SquareIcon,
   Star: StarIcon,
+  Sparkles: SparklesIcon,
+  BadgeCheck: CheckmarkBadge01Icon,
+  GitCommit: GitCommitIcon,
+  Route: Route01Icon,
   Target: Target02Icon,
   Terminal: ComputerTerminal01Icon,
   TextWrap: TextWrapIcon,

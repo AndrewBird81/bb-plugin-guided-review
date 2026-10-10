@@ -1,9 +1,13 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { useRpc } from "@get-bb/plugin-sdk/app";
+import { Markdown, useRpc } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
+import { withLineBreaks } from "../src/line-breaks";
+import { Badge } from "./ui/badge";
+import { Avatar } from "./ui/avatar";
+import { Icon } from "./ui/icon";
 
 export const ThreadsPanel = memo(function ThreadsPanel({ targetKey }: { targetKey: string }) {
   const rpc = useRpc<typeof rpcContract>();
@@ -76,28 +80,36 @@ export const ThreadsPanel = memo(function ThreadsPanel({ targetKey }: { targetKe
   }
 
   if (loaded && loadError) {
-    return <p className="p-4 text-sm text-destructive">Couldn't load review threads.</p>;
+    return (
+      <div className="m-4 flex items-start gap-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive-text">
+        <Icon name="AlertCircle" className="mt-0.5 size-4 shrink-0" aria-hidden />
+        <p>Couldn't load review threads.</p>
+      </div>
+    );
   }
 
   if (loaded && threads.length === 0) {
-    return <p className="p-4 text-sm text-muted-foreground">No review threads yet.</p>;
+    return (
+      <div className="flex flex-col items-center gap-3 p-8 text-center">
+        <span aria-hidden className="flex size-10 items-center justify-center rounded-full bg-muted/60 text-muted-foreground ring-1 ring-inset ring-border">
+          <Icon name="MessageSquare" className="size-5" />
+        </span>
+        <p className="text-sm text-muted-foreground">No review threads yet.</p>
+      </div>
+    );
   }
 
   return (
     <div className="space-y-3">
       {threads.map((t) => (
-        <div key={t.id} className="rounded-md border border-border bg-card p-3">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <span className="font-mono">
+        <div key={t.id} className="rounded-xl border border-border bg-card p-3 shadow-xs">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span className="min-w-0 break-all font-mono text-foreground">
               {t.path ?? "unknown file"}
               {t.line != null ? `:${t.line}` : ""}
             </span>
-            {t.isResolved && (
-              <span className="rounded-full border border-border px-1.5 text-[10px] uppercase">resolved</span>
-            )}
-            {t.isOutdated && (
-              <span className="rounded-full border border-border px-1.5 text-[10px] uppercase">outdated</span>
-            )}
+            {t.isResolved && <Badge tone="success">resolved</Badge>}
+            {t.isOutdated && <Badge tone="warning">outdated</Badge>}
             <Button
               variant="outline"
               size="sm"
@@ -108,14 +120,20 @@ export const ThreadsPanel = memo(function ThreadsPanel({ targetKey }: { targetKe
               {t.isResolved ? "Unresolve" : "Resolve"}
             </Button>
           </div>
-          <ul className="mt-2 space-y-1">
+          <ul className="mt-3 space-y-3">
             {(t.comments ?? []).map((c: any) => (
-              <li key={c.id} className="text-sm text-foreground">
-                <span className="font-medium">{c.author}</span>: <span>{c.body}</span>
+              <li key={c.id} className="space-y-1 text-sm text-foreground">
+                <div className="flex items-center gap-2">
+                  <Avatar login={String(c.author ?? "")} size={20} />
+                  <span className="font-medium">{c.author}</span>
+                </div>
+                <div className="pl-7">
+                  <Markdown content={withLineBreaks(c.body)} className="text-sm leading-relaxed" />
+                </div>
               </li>
             ))}
           </ul>
-          <div className="mt-2 flex items-end gap-2">
+          <div className="mt-3 flex items-end gap-2 border-t border-border pt-3">
             <Textarea
               value={drafts[t.id] ?? ""}
               onChange={(e) => setDrafts((d) => ({ ...d, [t.id]: e.target.value }))}

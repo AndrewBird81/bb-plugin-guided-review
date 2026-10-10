@@ -17,8 +17,14 @@ vi.mock("@pierre/diffs/react", () => ({
   },
 }));
 
-import { DiffViewer, type FileViewFlags } from "./DiffViewer";
-import { InlineComposerContext, InlineDraftContext, type InlineComposer, type InlineDraft } from "./InlineDraft";
+import { installTestPluginRuntime } from "@get-bb/plugin-sdk/testing/app";
+import type { FileViewFlags } from "./DiffViewer";
+import type { InlineComposer, InlineDraft } from "./InlineDraft";
+
+// Comments render with bb's Markdown, which binds to the plugin runtime when its module loads.
+installTestPluginRuntime();
+const { DiffViewer } = await import("./DiffViewer");
+const { InlineComposerContext, InlineDraftContext } = await import("./InlineDraft");
 
 afterEach(cleanup);
 
@@ -33,7 +39,7 @@ test("renders a file header with path, additions/deletions, and a Viewed checkbo
       onToggleViewed={() => {}}
     />,
   );
-  expect(screen.getByText("src/a.ts")).toBeTruthy();
+  expect(screen.getByTitle("src/a.ts").textContent).toBe("src/a.ts");
   expect(screen.getByText("+2")).toBeTruthy();
   expect(screen.getByText("−1")).toBeTruthy();
   expect(screen.getByTestId("filediff")).toBeTruthy(); // expanded body present
