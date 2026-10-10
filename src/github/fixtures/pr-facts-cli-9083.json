@@ -1,0 +1,350 @@
+{
+ "data": {
+  "p0": {
+   "pullRequest": {
+    "number": 9083,
+    "state": "CLOSED",
+    "isDraft": false,
+    "updatedAt": "2026-09-03T15:20:59Z",
+    "title": "add remote check to secret and variable commands",
+    "url": "https://github.com/cli/cli/pull/9083",
+    "baseRefName": "trunk",
+    "headRefName": "add-remote-check-to-secret-and-variable",
+    "headRefOid": "97b10370e1dec2f7be3665646d9a7b088edb180e",
+    "author": {
+     "login": "wingleung"
+    },
+    "reviewDecision": "CHANGES_REQUESTED",
+    "commits": {
+     "nodes": [
+      {
+       "commit": {
+        "oid": "0f9ad3b262d6a27ba362cbed928d1a0f168b787a"
+       }
+      },
+      {
+       "commit": {
+        "oid": "4854efbd82f46596303be30eab6073484eb391a5"
+       }
+      },
+      {
+       "commit": {
+        "oid": "97b10370e1dec2f7be3665646d9a7b088edb180e"
+       }
+      }
+     ]
+    },
+    "head": {
+     "nodes": [
+      {
+       "commit": {
+        "statusCheckRollup": null
+       }
+      }
+     ]
+    },
+    "latestOpinionatedReviews": {
+     "nodes": [
+      {
+       "state": "CHANGES_REQUESTED",
+       "author": {
+        "__typename": "User",
+        "login": "williammartin"
+       }
+      }
+     ]
+    },
+    "reviewRequests": {
+     "nodes": [
+      {
+       "requestedReviewer": {
+        "__typename": "User",
+        "login": "andyfeller"
+       }
+      }
+     ]
+    },
+    "reviews": {
+     "nodes": [
+      {
+       "id": "PRR_kwDODKw3uc599IxU",
+       "state": "COMMENTED",
+       "submittedAt": "2024-06-12T14:15:31Z",
+       "body": "",
+       "commit": {
+        "oid": "29ad2b6786e7b05b93d993f63dfca6228384e8e2"
+       },
+       "comments": {
+        "totalCount": 1,
+        "nodes": [
+         {
+          "replyTo": null
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRR_kwDODKw3uc6B18zY",
+       "state": "COMMENTED",
+       "submittedAt": "2024-07-15T18:36:12Z",
+       "body": "",
+       "commit": {
+        "oid": "29ad2b6786e7b05b93d993f63dfca6228384e8e2"
+       },
+       "comments": {
+        "totalCount": 1,
+        "nodes": [
+         {
+          "replyTo": {
+           "id": "PRRC_kwDODKw3uc5hi-qe"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRR_kwDODKw3uc6EcjVE",
+       "state": "COMMENTED",
+       "submittedAt": "2024-08-06T19:26:31Z",
+       "body": "",
+       "commit": {
+        "oid": "29ad2b6786e7b05b93d993f63dfca6228384e8e2"
+       },
+       "comments": {
+        "totalCount": 1,
+        "nodes": [
+         {
+          "replyTo": {
+           "id": "PRRC_kwDODKw3uc5hi-qe"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRR_kwDODKw3uc6Ecntu",
+       "state": "COMMENTED",
+       "submittedAt": "2024-08-06T19:37:36Z",
+       "body": "",
+       "commit": {
+        "oid": "29ad2b6786e7b05b93d993f63dfca6228384e8e2"
+       },
+       "comments": {
+        "totalCount": 1,
+        "nodes": [
+         {
+          "replyTo": {
+           "id": "PRRC_kwDODKw3uc5hi-qe"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRR_kwDODKw3uc6FHijp",
+       "state": "COMMENTED",
+       "submittedAt": "2024-08-12T15:13:39Z",
+       "body": "",
+       "commit": {
+        "oid": "df723bdb3933b94d32d92dae47c9faf9544d8cd0"
+       },
+       "comments": {
+        "totalCount": 1,
+        "nodes": [
+         {
+          "replyTo": null
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRR_kwDODKw3uc6FZiQr",
+       "state": "COMMENTED",
+       "submittedAt": "2024-08-14T12:48:59Z",
+       "body": "",
+       "commit": {
+        "oid": "df723bdb3933b94d32d92dae47c9faf9544d8cd0"
+       },
+       "comments": {
+        "totalCount": 1,
+        "nodes": [
+         {
+          "replyTo": {
+           "id": "PRRC_kwDODKw3uc5mKRgt"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRR_kwDODKw3uc6Fq_f6",
+       "state": "COMMENTED",
+       "submittedAt": "2024-08-16T12:46:56Z",
+       "body": "",
+       "commit": {
+        "oid": "df723bdb3933b94d32d92dae47c9faf9544d8cd0"
+       },
+       "comments": {
+        "totalCount": 1,
+        "nodes": [
+         {
+          "replyTo": {
+           "id": "PRRC_kwDODKw3uc5mKRgt"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRR_kwDODKw3uc6FrwJ4",
+       "state": "COMMENTED",
+       "submittedAt": "2024-08-16T18:52:10Z",
+       "body": "",
+       "commit": {
+        "oid": "01f19354f78aacc16a7434ae3764aeb61ad8a76a"
+       },
+       "comments": {
+        "totalCount": 1,
+        "nodes": [
+         {
+          "replyTo": null
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRR_kwDODKw3uc6F1h6x",
+       "state": "COMMENTED",
+       "submittedAt": "2024-08-19T12:19:19Z",
+       "body": "",
+       "commit": {
+        "oid": "01f19354f78aacc16a7434ae3764aeb61ad8a76a"
+       },
+       "comments": {
+        "totalCount": 1,
+        "nodes": [
+         {
+          "replyTo": {
+           "id": "PRRC_kwDODKw3uc5mh1Rs"
+          }
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRR_kwDODKw3uc6GmLLP",
+       "state": "APPROVED",
+       "submittedAt": "2024-08-23T21:51:20Z",
+       "body": "Just want to take a moment and say thank you for the monumental lift here, @wingleung ❤️ \r\n\r\nFrom the automated tests he",
+       "commit": {
+        "oid": "97b10370e1dec2f7be3665646d9a7b088edb180e"
+       },
+       "comments": {
+        "totalCount": 0,
+        "nodes": []
+       }
+      }
+     ]
+    },
+    "events": {
+     "nodes": [
+      {
+       "__typename": "ReadyForReviewEvent",
+       "createdAt": "2024-06-02T10:28:20Z"
+      },
+      {
+       "__typename": "ReviewRequestedEvent",
+       "createdAt": "2024-06-02T10:28:20Z",
+       "actor": {
+        "login": "wingleung"
+       },
+       "requestedReviewer": null
+      },
+      {
+       "__typename": "ReviewRequestedEvent",
+       "createdAt": "2024-06-02T10:28:21Z",
+       "actor": {
+        "login": "wingleung"
+       },
+       "requestedReviewer": {
+        "__typename": "User",
+        "login": "andyfeller"
+       }
+      },
+      {
+       "__typename": "ReviewRequestedEvent",
+       "createdAt": "2024-09-18T12:27:01Z",
+       "actor": {
+        "login": "andyfeller"
+       },
+       "requestedReviewer": {
+        "__typename": "User",
+        "login": "andyfeller"
+       }
+      }
+     ]
+    },
+    "conversation": {
+     "nodes": [
+      {
+       "author": {
+        "__typename": "User",
+        "login": "andyfeller"
+       },
+       "body": "@wingleung : thank you yet again for your time and effort to improve the GitHub CLI and your patience with my slow follo",
+       "createdAt": "2024-06-12T13:35:06Z"
+      },
+      {
+       "author": {
+        "__typename": "User",
+        "login": "andyfeller"
+       },
+       "body": "## Manual testing with forked repo\r\n\r\nThe following scenarios are exercising changes from the PR on a fork of a repo, wh",
+       "createdAt": "2024-08-23T21:37:36Z"
+      },
+      {
+       "author": {
+        "__typename": "User",
+        "login": "andyfeller"
+       },
+       "body": "## Manual testing directly against upstream\r\n\r\nWanting to make sure we were just testing the multiple remotes scenario, ",
+       "createdAt": "2024-08-23T21:48:01Z"
+      },
+      {
+       "author": {
+        "__typename": "User",
+        "login": "wingleung"
+       },
+       "body": "> Just want to take a moment and say thank you for the monumental lift here, @wingleung ❤️\r\n\r\n@andyfeller Pleasure was m",
+       "createdAt": "2024-08-25T07:01:13Z"
+      },
+      {
+       "author": {
+        "__typename": "User",
+        "login": "wingleung"
+       },
+       "body": "@williammartin thanks for the review!\r\n\r\nThe purpose was to only show prompts when prompts are desired, in this case we ",
+       "createdAt": "2024-09-24T19:02:13Z"
+      },
+      {
+       "author": {
+        "__typename": "User",
+        "login": "williammartin"
+       },
+       "body": "@wingleung, thanks for you patience here, there's been a lot on.\r\n\r\n> The purpose was to only show prompts when prompts ",
+       "createdAt": "2025-01-21T14:21:58Z"
+      },
+      {
+       "author": {
+        "__typename": "User",
+        "login": "wingleung"
+       },
+       "body": "@williammartin I want to thank you for the feedback on this PR, it's very clear and gave me a bit more to learn from ([S",
+       "createdAt": "2025-02-10T13:54:32Z"
+      }
+     ]
+    }
+   }
+  }
+ }
+}

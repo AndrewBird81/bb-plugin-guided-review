@@ -1,0 +1,330 @@
+{
+ "data": {
+  "repository": {
+   "pullRequest": {
+    "reviewThreads": {
+     "pageInfo": {
+      "hasNextPage": false,
+      "endCursor": "Y3Vyc29yOnYyOpK0MjAyNC0wOC0xNlQxNzo1NTowN1rOQYnABg=="
+     },
+     "nodes": [
+      {
+       "id": "PRRT_kwDODKw3uc491NMU",
+       "isResolved": true,
+       "isOutdated": false,
+       "path": "pkg/cmd/secret/delete/delete.go",
+       "line": 115,
+       "originalLine": 115,
+       "startLine": 115,
+       "diffSide": "RIGHT",
+       "subjectType": "LINE",
+       "resolvedBy": {
+        "login": "andyfeller"
+       },
+       "first": {
+        "nodes": [
+         {
+          "id": "PRRC_kwDODKw3uc5gxW32",
+          "databaseId": 1623551478,
+          "author": {
+           "login": "Jorslope"
+          },
+          "body": "Si",
+          "createdAt": "2024-06-02T16:41:01Z",
+          "pullRequestReview": {
+           "id": "PRR_kwDODKw3uc58uNAo"
+          }
+         }
+        ]
+       },
+       "recent": {
+        "nodes": [
+         {
+          "id": "PRRC_kwDODKw3uc5gxW32",
+          "author": {
+           "__typename": "User",
+           "login": "Jorslope"
+          },
+          "body": "Si",
+          "createdAt": "2024-06-02T16:41:01Z"
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRRT_kwDODKw3uc4-VMhJ",
+       "isResolved": true,
+       "isOutdated": false,
+       "path": "pkg/cmdutil/errors.go",
+       "line": 74,
+       "originalLine": 74,
+       "startLine": 61,
+       "diffSide": "RIGHT",
+       "subjectType": "LINE",
+       "resolvedBy": {
+        "login": "andyfeller"
+       },
+       "first": {
+        "nodes": [
+         {
+          "id": "PRRC_kwDODKw3uc5hi-qe",
+          "databaseId": 1636559518,
+          "author": {
+           "login": "andyfeller"
+          },
+          "body": "@wingleung : reflecting on https://github.com/cli/cli/issues/4688#issuecomment-1016708631 versus the code here, I think the original approach of prompting the u",
+          "createdAt": "2024-06-12T14:15:30Z",
+          "pullRequestReview": {
+           "id": "PRR_kwDODKw3uc599IxU"
+          }
+         }
+        ]
+       },
+       "recent": {
+        "nodes": [
+         {
+          "id": "PRRC_kwDODKw3uc5hi-qe",
+          "author": {
+           "__typename": "User",
+           "login": "andyfeller"
+          },
+          "body": "@wingleung : reflecting on https://github.com/cli/cli/issues/4688#issuecomment-1016708631 versus the code here, I think the original approach of prompting the u",
+          "createdAt": "2024-06-12T14:15:30Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5j5m2J",
+          "author": {
+           "__typename": "User",
+           "login": "williammartin"
+          },
+          "body": "Gentle nudge on this @wingleung, don't want it to get stale.\r\n\r\n@andyfeller if I read this correctly it's a breaking change for the following **non-interactive*",
+          "createdAt": "2024-07-12T14:45:04Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5kB_HZ",
+          "author": {
+           "__typename": "User",
+           "login": "andyfeller"
+          },
+          "body": "> @andyfeller if I read this correctly it's a breaking change for the following non-interactive script\r\n\r\n@williammartin : yeah; if we need to fallback to promp",
+          "createdAt": "2024-07-15T18:36:12Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5kCFhR",
+          "author": {
+           "__typename": "User",
+           "login": "williammartin"
+          },
+          "body": "I can't see any way to avoid it being a breaking change while also helping our users avoid a footgun. I'm a bit concerned about how many people it might break t",
+          "createdAt": "2024-07-15T19:00:04Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5la2UN",
+          "author": {
+           "__typename": "User",
+           "login": "wingleung"
+          },
+          "body": "I've been very busy at work so apologies for the late reply.\r\n\r\nOK, so if I understand correctly, there are 3 flows we want to cover, 2 of which are already cov",
+          "createdAt": "2024-08-02T08:58:07Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5la2ft",
+          "author": {
+           "__typename": "User",
+           "login": "wingleung"
+          },
+          "body": "### Breaking changes\r\n\r\nwe could do a minor release to introduce a warning for the v2 cli and mention this would be a breaking change in v3? Meanwhile working o",
+          "createdAt": "2024-08-02T08:58:44Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5la4_Z",
+          "author": {
+           "__typename": "User",
+           "login": "wingleung"
+          },
+          "body": "nice to see how remotes are being handle in other places, maybe in another ticket it could be looked into on how to merge all those strategies into 1 helper fun",
+          "createdAt": "2024-08-02T09:03:41Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5lr6bT",
+          "author": {
+           "__typename": "User",
+           "login": "andyfeller"
+          },
+          "body": "> I've been very busy at work so apologies for the late reply.\r\n\r\n@wingleung : I just want to say you owe us no apology; thank you for yet again working to impr",
+          "createdAt": "2024-08-06T19:26:31Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5lr9Bx",
+          "author": {
+           "__typename": "User",
+           "login": "andyfeller"
+          },
+          "body": "I think this summarizes the changes adequately, yes:\r\n\r\n> ✅ flow 1: command with 1 remote\r\n> ✅ flow 2: command with multiple remotes in non-interactive mode\r\n> ",
+          "createdAt": "2024-08-06T19:37:36Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5mJZek",
+          "author": {
+           "__typename": "User",
+           "login": "wingleung"
+          },
+          "body": "https://github.com/cli/cli/pull/9083/commits/81e7ecdfc135854c2609f769c4b47251da80b78e added a prompt for interactive mode on following commands\r\n- `gh secret se",
+          "createdAt": "2024-08-12T13:10:11Z"
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRRT_kwDODKw3uc5BTScx",
+       "isResolved": true,
+       "isOutdated": false,
+       "path": "pkg/cmdutil/repo_override.go",
+       "line": 95,
+       "originalLine": 95,
+       "startLine": 78,
+       "diffSide": "RIGHT",
+       "subjectType": "LINE",
+       "resolvedBy": {
+        "login": "andyfeller"
+       },
+       "first": {
+        "nodes": [
+         {
+          "id": "PRRC_kwDODKw3uc5mKRgt",
+          "databaseId": 1713969197,
+          "author": {
+           "login": "andyfeller"
+          },
+          "body": "Everything from this logic tracks for me.  My main question is whether situations where `gh repo set-default` has explicitly set a remote / base should just use",
+          "createdAt": "2024-08-12T15:13:38Z",
+          "pullRequestReview": {
+           "id": "PRR_kwDODKw3uc6FHijp"
+          }
+         }
+        ]
+       },
+       "recent": {
+        "nodes": [
+         {
+          "id": "PRRC_kwDODKw3uc5mKRgt",
+          "author": {
+           "__typename": "User",
+           "login": "andyfeller"
+          },
+          "body": "Everything from this logic tracks for me.  My main question is whether situations where `gh repo set-default` has explicitly set a remote / base should just use",
+          "createdAt": "2024-08-12T15:13:38Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5mKjXP",
+          "author": {
+           "__typename": "User",
+           "login": "wingleung"
+          },
+          "body": "I was in doubt here, it would kind of feel like forced magic here. Yes, you might set the default but there could be another repo you want to create secrets on,",
+          "createdAt": "2024-08-12T15:59:27Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5mVUhs",
+          "author": {
+           "__typename": "User",
+           "login": "andyfeller"
+          },
+          "body": "First, I want to say thank you for taking security so seriously 🤗 at GitHub!  Our Engineering leader `@mph4` constantly says _\"Raise your ✋ if you're on the Se",
+          "createdAt": "2024-08-14T12:48:59Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5mfKfC",
+          "author": {
+           "__typename": "User",
+           "login": "wingleung"
+          },
+          "body": "oooh I see, thanks for explaining it to me, I should've seen it in the docs. Even if it would be counter intuitive for some, that would be for another discussio",
+          "createdAt": "2024-08-16T07:12:20Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5mggYu",
+          "author": {
+           "__typename": "User",
+           "login": "andyfeller"
+          },
+          "body": "Again, thank you for being intentional and being open to discussion! 🙇 ",
+          "createdAt": "2024-08-16T12:46:56Z"
+         }
+        ]
+       }
+      },
+      {
+       "id": "PRRT_kwDODKw3uc5BicAG",
+       "isResolved": false,
+       "isOutdated": true,
+       "path": "pkg/cmd/variable/set/set.go",
+       "line": null,
+       "originalLine": 197,
+       "startLine": 178,
+       "diffSide": "RIGHT",
+       "subjectType": "LINE",
+       "resolvedBy": null,
+       "first": {
+        "nodes": [
+         {
+          "id": "PRRC_kwDODKw3uc5mh1Rs",
+          "databaseId": 1720145004,
+          "author": {
+           "login": "andyfeller"
+          },
+          "body": "**Taking a step back from the code, is the following the logical order that repository should be identified?**\r\n\r\n1. If a user specifies `--owner` this is an or",
+          "createdAt": "2024-08-16T17:55:07Z",
+          "pullRequestReview": {
+           "id": "PRR_kwDODKw3uc6FrwJ4"
+          }
+         }
+        ]
+       },
+       "recent": {
+        "nodes": [
+         {
+          "id": "PRRC_kwDODKw3uc5mh1Rs",
+          "author": {
+           "__typename": "User",
+           "login": "andyfeller"
+          },
+          "body": "**Taking a step back from the code, is the following the logical order that repository should be identified?**\r\n\r\n1. If a user specifies `--owner` this is an or",
+          "createdAt": "2024-08-16T17:55:07Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5mnxDs",
+          "author": {
+           "__typename": "User",
+           "login": "andyfeller"
+          },
+          "body": "### Discussing with @williammartin ✨ \r\n\r\n@wingleung : firstly, allow me to apologize for confusion on my part; Will has highlighted the fact that `gh.resolved` ",
+          "createdAt": "2024-08-19T12:19:18Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5m1ns_",
+          "author": {
+           "__typename": "User",
+           "login": "wingleung"
+          },
+          "body": "> 1. If a user specifies `--owner` this is an organization secret; otherwise it is a repository secret of some sort\r\n\r\nI think you meant `--org` instead of `--o",
+          "createdAt": "2024-08-21T15:49:32Z"
+         },
+         {
+          "id": "PRRC_kwDODKw3uc5m1yST",
+          "author": {
+           "__typename": "User",
+           "login": "wingleung"
+          },
+          "body": "> During our conversation, Will highlighted several things including:\r\n> \r\n> 1. Remove the line about `gh repo set-default` as this is technically the problem w",
+          "createdAt": "2024-08-21T16:20:05Z"
+         }
+        ]
+       }
+      }
+     ]
+    }
+   }
+  }
+ }
+}
