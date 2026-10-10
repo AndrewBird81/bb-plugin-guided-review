@@ -75,3 +75,13 @@ test("a dismissed approval returns to the review queue", async () => {
   await sync.all();
   expect(store.getReview("pr-1")?.submittedVerdict).toBeNull();
 });
+
+test("a reply to a thread keeps your changes-requested verdict", async () => {
+  const { sync, store } = setup("OPEN", [
+    { state: "CHANGES_REQUESTED", submittedAt: "2026-10-01T10:00:00Z", body: "Needs work", author: { login: "me" }, commit: { oid: "sha0" }, comments: { totalCount: 2, nodes: [{ replyTo: null }] } },
+    // GitHub records a thread reply as a blank COMMENTED review of its own.
+    { state: "COMMENTED", submittedAt: "2026-10-02T10:00:00Z", body: "", author: { login: "me" }, commit: { oid: "sha1" }, comments: { totalCount: 1, nodes: [{ replyTo: { id: "c1" } }] } },
+  ]);
+  await sync.all();
+  expect(store.getReview("pr-1")).toMatchObject({ submittedVerdict: "REQUEST_CHANGES", submittedHeadSha: "sha0", submittedAt: Date.parse("2026-10-01T10:00:00Z") });
+});

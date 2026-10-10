@@ -3,17 +3,21 @@ import { z } from "zod";
 import type { Store, ReviewLifecycle } from "./store";
 import { isMissingThread } from "./thread-errors";
 import type { runGh } from "./gh";
+import { verdictOf } from "./review-verdict";
 
 const query = `query($owner:String!,$repo:String!,$number:Int!){
   viewer{login} repository(owner:$owner,name:$repo){pullRequest(number:$number){
-    state headRefOid reviews(last:100){nodes{state submittedAt author{login} commit{oid}}}
+    state headRefOid reviews(last:100){nodes{state submittedAt body author{login} commit{oid} comments(first:1){totalCount nodes{replyTo{id}}}}}
   }}
 }`;
 const resultSchema = z.object({ data: z.object({
   viewer: z.object({ login: z.string() }),
   repository: z.object({ pullRequest: z.object({
     state: z.enum(["OPEN", "CLOSED", "MERGED"]), headRefOid: z.string(),
-    reviews: z.object({ nodes: z.array(z.object({ state: z.string(), submittedAt: z.string().nullable(), author: z.object({ login: z.string() }).nullable(), commit: z.object({ oid: z.string() }).nullable() })) }),
+    reviews: z.object({ nodes: z.array(z.object({
+      state: z.string(), submittedAt: z.string().nullable(), body: z.string().nullish(), author: z.object({ login: z.string() }).nullable(), commit: z.object({ oid: z.string() }).nullable(),
+      comments: z.object({ totalCount: z.number(), nodes: z.array(z.object({ replyTo: z.object({ id: z.string() }).nullable() })) }).nullish(),
+    })) }),
   }) }),
 }) });
 
@@ -71,15 +75,14 @@ export function createReviewSync(bb: BbPluginApi, store: Store, run: typeof runG
         if (current.prState === "MERGED" && pr.state !== "MERGED") return;
         const state: ReviewLifecycle = { prState: pr.state, latestHeadSha: pr.headRefOid,
           archivedAt: pr.state === "OPEN" ? null : current.archivedAt ?? Date.now() };
-        const own = pr.reviews.nodes.filter((r) => r.author?.login === viewer.login && r.state !== "PENDING")
-          .sort((a, b) => Date.parse(b.submittedAt ?? "") - Date.parse(a.submittedAt ?? ""))[0];
+        // Replies to threads arrive as reviews of their own; they don't change your verdict.
+        const own = verdictOf(pr.reviews.nodes.filter((r) => r.author?.login === viewer.login));
         if ((current.submittedAt ?? 0) < startedAt) {
-          const verdict = own?.state === "APPROVED" ? "APPROVE" : own?.state === "CHANGES_REQUESTED" ? "REQUEST_CHANGES" : own?.state === "COMMENTED" ? "COMMENT" : null;
           // GitHub can lag immediately after a write. Never replace a newer local receipt with an older response.
-          const remoteAt = own?.submittedAt ? Date.parse(own.submittedAt) : 0;
-          if (own && (remoteAt >= (current.submittedAt ?? 0) - 1000 || own.state === "DISMISSED") || current.reviewer && current.reviewer !== viewer.login) {
-            Object.assign(state, { submittedVerdict: verdict, submittedAt: remoteAt || null,
-              submittedHeadSha: own?.commit?.oid ?? null, reviewer: viewer.login });
+          const remoteAt = own?.at ?? 0;
+          if (own && (remoteAt >= (current.submittedAt ?? 0) - 1000 || own.verdict === null) || current.reviewer && current.reviewer !== viewer.login) {
+            Object.assign(state, { submittedVerdict: own?.verdict ?? null, submittedAt: remoteAt || null,
+              submittedHeadSha: own?.sha ?? null, reviewer: viewer.login });
           }
         }
         store.setLifecycle(targetKey, state);
