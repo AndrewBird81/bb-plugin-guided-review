@@ -266,3 +266,23 @@ test("discovery adds PRs you're asked to review, skips deleted ones, and auto-st
   await vi.waitFor(() => expect(s.published).toHaveLength(1));
   expect(s.published[0]).toMatchObject({ title: "Fix login", body: expect.stringContaining("requested your review") });
 });
+
+test("evaluations of one review run one at a time, so a signal is prepared once", async () => {
+  const s = setup({ reviewed: true });
+  await s.sync.all();
+  s.pr({ headSha: "sha2", commits: ["sha1", "sha2"], requests: [{ at: T0 + 0.1 * HOUR, by: "alice", via: "user" }] });
+  s.at(0.2);
+  await s.sync.all(true);
+  vi.mocked(s.actions.prepare).mockClear();
+  // A newer request at a new head, evaluated from two places at once.
+  s.pr({ headSha: "sha3", commits: ["sha1", "sha2", "sha3"], requests: [{ at: T0 + 0.3 * HOUR, by: "alice", via: "user" }] });
+  s.at(0.4);
+  let release!: () => void;
+  vi.mocked(s.actions.prepare).mockImplementation(() => new Promise((resolve) => { release = () => resolve(true); }));
+  const pass = s.sync.all(true);
+  await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+  const again = s.sync.evaluate("pr-1");
+  release();
+  await Promise.all([pass, again]);
+  expect(s.actions.prepare).toHaveBeenCalledTimes(1);
+});

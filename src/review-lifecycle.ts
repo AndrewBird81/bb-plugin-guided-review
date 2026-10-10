@@ -185,7 +185,16 @@ export function createReviewSync(bb: BbPluginApi, store: Store, run: typeof runG
    * ALERT_WAIT), prepare re-reviews, check settled pushes, and clear the alert when it leaves Needs review.
    * `quiet` records the current turn as handled without acting, for the first pass after an upgrade.
    */
-  async function evaluate(key: string, quiet = false): Promise<void> {
+  // One evaluation per review at a time: two could both see a new signal and prepare it twice.
+  const evaluating = new Map<string, Promise<void>>();
+  function evaluate(key: string, quiet = false): Promise<void> {
+    const next = (evaluating.get(key) ?? Promise.resolve()).catch(() => {}).then(() => evaluateNow(key, quiet));
+    evaluating.set(key, next);
+    void next.catch(() => {}).finally(() => { if (evaluating.get(key) === next) evaluating.delete(key); });
+    return next;
+  }
+
+  async function evaluateNow(key: string, quiet: boolean): Promise<void> {
     let review = store.getReview(key);
     if (!review || disposed) return;
     const now = clock();
