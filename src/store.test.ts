@@ -94,6 +94,7 @@ test("deleteReview clears every per-review table and leaves other reviews intact
     s.saveAssessmentItems(key, "sha1", [{ id: "t1", verdict: "addressed", evidence: "Fixed", assessedAt: 1 }]);
     s.saveAssessmentRun(key, { headSha: "sha1", summary: "", suggestedVerdict: null, suggestedBody: "", assessedAt: 1 });
     s.setReplyDraft(key, "t1", "Thanks", "agent");
+    s.backupGuide(key);
   }
   s.deleteReview("pr-1");
 
@@ -186,4 +187,31 @@ test("a draft comment remembers its line's text and can move with it", () => {
   expect(s.getDraft("pr-1").comments).toMatchObject([{ line: 3, body: "Why?" }]);
   expect(s.staleDraftComments("pr-1")).toHaveLength(0);
   expect(s.draftCommentCode("pr-1", { file: "a.ts", line: 3, side: "RIGHT" })).toBe("added line");
+});
+
+test("threads already resolved on the first read date from their last activity", () => {
+  const s = store();
+  const old = { ...thread("t1", true), createdAt: 100, replies: [{ author: "alice", bot: false, mine: false, body: "Done", createdAt: 500 }] };
+  s.saveFeedbackThreads("pr-1", [old, thread("t2", false)], 1);
+  expect(s.listFeedbackThreads("pr-1").find((t) => t.id === "t1")?.resolvedSeenAt).toBe(500);
+  // Later, a newly resolved thread dates from when bb saw it.
+  s.saveFeedbackThreads("pr-1", [old, { ...thread("t2", true), createdAt: 100 }], 2);
+  expect(s.listFeedbackThreads("pr-1").find((t) => t.id === "t2")!.resolvedSeenAt).toBeGreaterThan(1_000_000);
+});
+
+test("a failed or interrupted rebuild puts the previous guide and diff back", () => {
+  const s = store();
+  s.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, status: "ready", createdAt: 1, headSha: "sha1", base: "main", head: "feat" });
+  s.savePatch("pr-1", "old patch");
+  s.saveGuide("pr-1", { title: "Old", intent: "I", sections: [], unplacedFiles: [] });
+  s.backupGuide("pr-1");
+  s.savePatch("pr-1", "new patch");
+  s.saveReview({ ...s.getReview("pr-1")!, headSha: "sha2", status: "generating" });
+  s.beginGeneration("pr-1");
+  expect(s.getGuide("pr-1")).toBeNull();
+  s.interruptGenerations();
+  expect(s.getGuide("pr-1")?.title).toBe("Old");
+  expect(s.readPatch("pr-1").text).toBe("old patch");
+  expect(s.getReview("pr-1")).toMatchObject({ headSha: "sha1", status: "error" });
+  expect(s.restoreGuide("pr-1")).toBe(false);
 });

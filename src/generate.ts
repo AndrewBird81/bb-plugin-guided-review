@@ -80,6 +80,9 @@ export async function generateGuide(
   try {
     if (!generationId || !store.isCurrentGeneration(targetKey, generationId)) return;
     const ok = !controller.signal.aborted && store.getGuide(targetKey) !== null;
+    // A failed rebuild keeps the guide you had.
+    if (ok) store.dropGuideBackup(targetKey);
+    else store.restoreGuide(targetKey);
     store.setStatus(targetKey, ok ? "ready" : "error");
     // The review's assistant reads the new guide when its runtime restarts.
     if (ok) void refreshAssistants(bb, store, [targetKey]);

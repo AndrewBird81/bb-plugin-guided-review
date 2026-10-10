@@ -20,16 +20,19 @@ export function factsUpdate(previous: ReviewMeta, facts: PrFacts, viewer: string
     archivedAt: facts.state === "OPEN" ? null : previous.archivedAt ?? now,
   };
   const own = verdictFromMine(facts.myReviews);
-  if ((previous.submittedAt ?? 0) < startedAt) {
-    // GitHub can lag immediately after a write. Never replace a newer local receipt with an older response.
-    const remoteAt = own?.at ?? 0;
-    if (own && (remoteAt >= (previous.submittedAt ?? 0) - 1000 || own.verdict === null) || previous.reviewer && previous.reviewer !== viewer) {
-      Object.assign(update, { submittedVerdict: own?.verdict ?? null, submittedAt: remoteAt || null, submittedHeadSha: own?.sha ?? null, reviewer: viewer });
+  const local = previous.submittedAt ?? 0;
+  if (local < startedAt) {
+    // GitHub can lag right after a write: keep a review submitted here until GitHub reports it,
+    // recognized by its id. Without one (older receipts), its time; after ten minutes, GitHub's word stands.
+    const seen = previous.submittedReviewId ? facts.myReviews.some((r) => r.id === previous.submittedReviewId) : (own?.at ?? 0) >= local - 1000;
+    if (own && (seen || now - local > RECEIPT_GRACE || own.verdict === null) || previous.reviewer && previous.reviewer !== viewer) {
+      Object.assign(update, { submittedVerdict: own?.verdict ?? null, submittedAt: own?.at || null, submittedHeadSha: own?.sha ?? null, reviewer: viewer, submittedReviewId: null });
     }
   }
   const verdict = "submittedVerdict" in update ? update.submittedVerdict : previous.submittedVerdict;
-  // A request the author withdrew doesn't count.
-  const request = facts.requests.filter((r) => !(facts.requestRemovedAt && facts.requestRemovedAt > r.at)).at(-1);
+  // A request the author withdrew doesn't count. A pending one keeps its time if its event scrolls out of the timeline.
+  const request = facts.requests.filter((r) => !(facts.requestRemovedAt && facts.requestRemovedAt > r.at)).at(-1)
+    ?? (facts.requestPending && s.requestedAt ? { at: s.requestedAt, by: s.requestedBy ?? null, via: s.requestedVia ?? facts.requestPending.via } : undefined);
   const others = facts.otherOpinions;
   const reviewedAt = own?.sha ? facts.commits.lastIndexOf(own.sha) : -1;
   update.signals = {
@@ -54,6 +57,8 @@ export function factsUpdate(previous: ReviewMeta, facts: PrFacts, viewer: string
     .map((r) => ({ state: r.state, at: r.submittedAt, body: r.body.slice(0, 4000) }));
   return update;
 }
+
+const RECEIPT_GRACE = 10 * 60_000;
 
 /** Your threads' standing, as signals. */
 export function threadSignals(threads: ReadonlyArray<FeedbackThread & { resolvedSeenAt?: number | null }>): Pick<TurnSignals, "threads" | "questionAt" | "replyAt" | "handledAt"> {

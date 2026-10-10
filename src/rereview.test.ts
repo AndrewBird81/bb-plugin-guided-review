@@ -90,3 +90,20 @@ test("rerunReview leaves the review as it was when the guide writer's machine is
   expect(store.getReview("pr-7")).toMatchObject({ status: "ready", headSha: "oldsha" });
   expect(store.readPatch("pr-7").text).toBe("stale patch");
 });
+
+test("a review deleted while its PR loads isn't brought back", async () => {
+  const { rerunReview } = await import("./rereview");
+  const { bb } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: { spawn: async () => ({ id: "w" }), wait: async () => ({}), archive: async () => ({}), stop: async () => ({}) } } as any });
+  const store = createStore(bb);
+  store.saveReview({ targetKey: "pr-9", kind: "pr", number: 9, repo: "acme/web", status: "ready", createdAt: 1, projectId: "p1", headSha: "sha1" });
+  const runGh = vi.fn(async (args: string[]) => {
+    // The reviewer deletes the review while GitHub answers.
+    store.deleteReview("pr-9");
+    if (args[1] === "view") return { code: 0, stderr: "", stdout: JSON.stringify({ title: "T", baseRefName: "main", headRefName: "h", url: "u", headRefOid: "sha2" }) };
+    if (args[1] === "diff") return { code: 0, stderr: "", stdout: "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b\n" };
+    return { code: 0, stderr: "", stdout: JSON.stringify({ headRefOid: "sha2" }) };
+  });
+  const result = await rerunReview({ bb, store, gh: { runGh: runGh as any, runGit: vi.fn() as any } }, "pr-9");
+  expect(result).toEqual({ ok: false, error: "This review was deleted." });
+  expect(store.getReview("pr-9")).toBeNull();
+});

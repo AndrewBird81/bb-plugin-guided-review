@@ -5,19 +5,15 @@ export const BATCH_SIZE = 10;
 
 const REVIEWER = "__typename ... on User{login} ... on Team{slug organization{login}}";
 const FRAGMENT = `fragment F on PullRequest{
-  number state isDraft updatedAt title url baseRefName headRefName headRefOid author{login} reviewDecision
+  number state isDraft updatedAt title url baseRefName headRefName headRefOid author{login}
   commits(last:100){nodes{commit{oid}}}
   head:commits(last:1){nodes{commit{statusCheckRollup{state}}}}
   latestOpinionatedReviews(first:50){nodes{state author{__typename login}}}
   reviewRequests(first:50){nodes{requestedReviewer{${REVIEWER}}}}
   reviews(last:30,author:$viewer){nodes{id state submittedAt body commit{oid} comments(first:20){totalCount nodes{replyTo{id}}}}}
-  events:timelineItems(last:30,itemTypes:[REVIEW_REQUESTED_EVENT,REVIEW_REQUEST_REMOVED_EVENT,READY_FOR_REVIEW_EVENT,CONVERT_TO_DRAFT_EVENT,REVIEW_DISMISSED_EVENT,HEAD_REF_FORCE_PUSHED_EVENT]){nodes{__typename
+  events:timelineItems(last:30,itemTypes:[REVIEW_REQUESTED_EVENT,REVIEW_REQUEST_REMOVED_EVENT]){nodes{__typename
     ... on ReviewRequestedEvent{createdAt actor{login} requestedReviewer{${REVIEWER}}}
-    ... on ReviewRequestRemovedEvent{createdAt actor{login} requestedReviewer{${REVIEWER}}}
-    ... on ReadyForReviewEvent{createdAt}
-    ... on ConvertToDraftEvent{createdAt}
-    ... on ReviewDismissedEvent{createdAt review{author{login}}}
-    ... on HeadRefForcePushedEvent{createdAt}}}
+    ... on ReviewRequestRemovedEvent{createdAt actor{login} requestedReviewer{${REVIEWER}}}}}
   conversation:timelineItems(last:15,itemTypes:[ISSUE_COMMENT]){nodes{... on IssueComment{author{__typename login} body createdAt}}}
 }`;
 
@@ -50,20 +46,31 @@ export function parsePrFacts(json: unknown, refs: PrRef[], viewer: string, teams
   return result;
 }
 
-/** Batches by BATCH_SIZE through `gh api graphql`. A PR GitHub can't find maps to null; a transport failure or unparseable output rejects. */
+/**
+ * Batches by BATCH_SIZE through `gh api graphql`. A PR GitHub can't find maps to null; a batch that
+ * fails leaves its PRs out of the map, and only when every batch fails does this reject.
+ */
 export async function fetchPrFacts(run: RunGh, refs: PrRef[], viewer: string, teams: ReadonlySet<string>): Promise<Map<string, PrFacts | null>> {
   const result = new Map<string, PrFacts | null>();
+  let failure: Error | null = null;
+  let read = 0;
   for (let i = 0; i < refs.length; i += BATCH_SIZE) {
     const batch = refs.slice(i, i + BATCH_SIZE);
     const { query, variables } = prFactsQuery(batch);
     const args = ["api", "graphql", "-f", `query=${query}`, "-f", `viewer=${viewer}`];
     for (const [key, value] of Object.entries(variables)) args.push(typeof value === "number" ? "-F" : "-f", `${key}=${value}`);
-    // `gh` exits non-zero when GraphQL reports any error, even with partial data on stdout.
-    const out = await run(args);
-    let json: unknown;
-    try { json = JSON.parse(out.stdout); } catch { throw new Error(`Could not read PR facts: ${out.stderr.trim() || `gh exited ${out.code}`}`); }
-    for (const [key, facts] of parsePrFacts(json, batch, viewer, teams)) result.set(key, facts);
+    try {
+      // `gh` exits non-zero when GraphQL reports any error, even with partial data on stdout.
+      const out = await run(args);
+      let json: unknown;
+      try { json = JSON.parse(out.stdout); } catch { throw new Error(`Could not read PR facts: ${out.stderr.trim() || `gh exited ${out.code}`}`); }
+      for (const [key, facts] of parsePrFacts(json, batch, viewer, teams)) result.set(key, facts);
+      read++;
+    } catch (error) {
+      failure = error instanceof Error ? error : new Error(String(error));
+    }
   }
+  if (failure && !read) throw failure;
   return result;
 }
 
@@ -119,10 +126,13 @@ function normalize(pr: any, ref: PrRef, viewer: string, teams: ReadonlySet<strin
   const pending = (pr.reviewRequests?.nodes ?? []).map((n: any) => via(n?.requestedReviewer, viewer, teams)).filter(Boolean);
   const requestPending = pending.find((p: any) => p.via === "user") ?? pending[0] ?? null;
 
-  const mention = (pr.conversation?.nodes ?? [])
-    .filter((c: any) => c?.author && !same(c.author.login, viewer) && !isBot(c.author) && mentions(c.body ?? "", viewer))
-    .map((c: any) => ({ at: time(c.createdAt), by: c.author.login as string }))
-    .sort((a: { at: number }, b: { at: number }) => b.at - a.at)[0] ?? null;
+  const conversation: any[] = (pr.conversation?.nodes ?? []).filter((c: any) => c?.author);
+  // Your own comment answers the mentions before it.
+  const answered = latest(conversation.filter((c) => same(c.author.login, viewer)).map((c) => time(c.createdAt)).filter(Number.isFinite)) ?? 0;
+  const mention = conversation
+    .filter((c) => !same(c.author.login, viewer) && !isBot(c.author) && mentions(c.body ?? "", viewer) && time(c.createdAt) > answered)
+    .map((c) => ({ at: time(c.createdAt), by: c.author.login as string }))
+    .sort((a, b) => b.at - a.at)[0] ?? null;
 
   const otherOpinions = (pr.latestOpinionatedReviews?.nodes ?? [])
     .filter((r: any) => r?.author && !same(r.author.login, viewer) && !isBot(r.author) && (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED"))
@@ -134,13 +144,8 @@ function normalize(pr: any, ref: PrRef, viewer: string, teams: ReadonlySet<strin
     baseRefName: pr.baseRefName ?? "", headRefName: pr.headRefName ?? "", headSha: pr.headRefOid ?? "",
     updatedAt: time(pr.updatedAt),
     ci: CI[pr.head?.nodes?.[0]?.commit?.statusCheckRollup?.state] ?? "none",
-    reviewDecision: pr.reviewDecision ?? null,
     myReviews, otherOpinions, requests, requestPending,
     requestRemovedAt: at("ReviewRequestRemovedEvent", (e) => !!via(e.requestedReviewer, viewer, teams)),
-    readyAt: at("ReadyForReviewEvent"),
-    draftAt: at("ConvertToDraftEvent"),
-    dismissedAt: at("ReviewDismissedEvent", (e) => same(e.review?.author?.login, viewer)),
-    forcePushedAt: at("HeadRefForcePushedEvent"),
     mention,
     commits: (pr.commits?.nodes ?? []).map((n: any) => n?.commit?.oid).filter(Boolean),
   };

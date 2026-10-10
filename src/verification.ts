@@ -39,7 +39,8 @@ export async function startVerification(bb: BbPluginApi, store: Store, targetKey
     bb.log.warn(`The feedback check for ${targetKey} didn't start: ${String(error)}`);
     return false;
   }
-  store.setLifecycle(targetKey, { verifyingSince: Date.now() });
+  // The check is about this commit, even if the author pushes while it runs.
+  store.setLifecycle(targetKey, { verifyingSince: Date.now(), verifyingHead: headOf(review) });
   bb.realtime.publish(`conversation:${targetKey}`, {});
   return true;
 }
@@ -83,7 +84,7 @@ export async function changesSinceReview(store: Store, run: Run, review: ReviewM
 }
 
 async function commitsSince(run: Run, review: ReviewMeta, sha: string): Promise<string> {
-  const out = await run(["api", `repos/${review.repo}/pulls/${review.number}/commits?per_page=100`, "--jq", ".[] | [.sha, (.commit.message | split(\"\\n\")[0])] | @tsv"]);
+  const out = await run(["api", "--paginate", `repos/${review.repo}/pulls/${review.number}/commits?per_page=100`, "--jq", ".[] | [.sha, (.commit.message | split(\"\\n\")[0])] | @tsv"]);
   if (out.code !== 0) throw new Error(out.stderr);
   const rows = out.stdout.trim().split("\n").filter(Boolean).map((row) => row.split("\t"));
   const index = rows.findIndex(([oid]) => oid === sha);
@@ -96,7 +97,10 @@ async function commitsSince(run: Run, review: ReviewMeta, sha: string): Promise<
 export async function readFileAt(run: Run, review: ReviewMeta, path: string, ref: "current" | "reviewed", startLine = 1, endLine?: number): Promise<string> {
   const sha = ref === "reviewed" ? baselineOf(review).sha : headOf(review);
   if (!sha || !review.repo) return "There's no such commit for this review.";
-  const encoded = path.split("/").map(encodeURIComponent).join("/");
+  // A repo-relative path only: no "." or ".." segments that could reach another GitHub endpoint.
+  const segments = path.split("/");
+  if (path.startsWith("/") || segments.some((segment) => !segment || segment === "." || segment === "..")) return `${path} isn't a repo-relative file path.`;
+  const encoded = segments.map(encodeURIComponent).join("/");
   const out = await run(["api", "-H", "Accept: application/vnd.github.raw", `repos/${review.repo}/contents/${encoded}?ref=${sha}`]);
   if (out.code !== 0) return `Couldn't read ${path} at ${short(sha)}: ${out.stderr.trim() || "not found"}`;
   const lines = out.stdout.split("\n");
@@ -115,7 +119,8 @@ export interface AssessInput {
 
 /** assess_feedback: record the assistant's verdicts for the PR's head. */
 export function assess(store: Store, review: ReviewMeta, input: AssessInput): { ok: true; text: string } | { ok: false; error: string } {
-  const head = headOf(review);
+  // During a check, verdicts belong to the commit it started on; the author may have pushed since.
+  const head = review.verifyingSince && review.verifyingHead ? review.verifyingHead : headOf(review);
   if (!head) return { ok: false, error: "This review has no commit to check against." };
   const threadIds = store.listFeedbackThreads(review.targetKey).map((t) => t.id);
   const unknown = input.items.filter((item) => !threadIds.includes(item.id) && !isSummaryItem(item.id)).map((item) => item.id);

@@ -7,7 +7,11 @@ export type GateResult =
   | { kind: "unchanged" }
   | { kind: "unsupported" };
 
-export interface NotificationGate { poll(): Promise<GateResult> }
+export interface NotificationGate {
+  poll(): Promise<GateResult>;
+  /** Start over, for example after the GitHub account switches. */
+  reset?(): void;
+}
 
 const ENDPOINT = "notifications?participating=true&per_page=50";
 const UNSUPPORTED_MS = 60 * 60_000;
@@ -66,6 +70,12 @@ export function createNotificationGate(run: RunGh, now: () => number = Date.now)
       const prs = changedPrs(response.body);
       lastModified = response.headers.get("last-modified") ?? lastModified;
       return { kind: "changed", prs };
+    },
+    reset() {
+      lastModified = null;
+      lastRequestAt = null;
+      intervalMs = 0;
+      unsupportedUntil = 0;
     },
   };
 }

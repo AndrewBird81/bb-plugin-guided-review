@@ -22,7 +22,7 @@ async function setup() {
   runGh.mockImplementation(async (args: string[]) => {
     if (args[0] === "api" && args[1] === "user") return { stdout: "me\n", stderr: "", code: 0 };
     if (args.includes("Accept: application/vnd.github.diff")) return { stdout: reviewed, stderr: "", code: 0 };
-    if (args[0] === "api" && String(args[1]).includes("/commits")) return { stdout: "sha1\tAdd cache\nsha2\tInvalidate on write\n", stderr: "", code: 0 };
+    if (args[0] === "api" && args.some((a) => a.includes("/commits"))) return { stdout: "sha1\tAdd cache\nsha2\tInvalidate on write\n", stderr: "", code: 0 };
     if (args[0] === "api" && String(args.at(-1)).includes("/contents/")) return { stdout: "line one\nline two\n", stderr: "", code: 0 };
     if (args[0] === "api" && String(args[3]).includes("/replies")) return { stdout: "{}", stderr: "", code: 0 };
     // Threads read when the RPCs refresh them.
@@ -134,4 +134,32 @@ test("deleting a PR keeps discovery from adding it back", async () => {
   store.clearAssistantThread("pr-1");
   expect(await call("deleteReview", { targetKey: "pr-1" })).toEqual({ ok: true });
   expect(store.isDiscoveryIgnored("pr-1")).toBe(true);
+});
+
+test("a check records verdicts for the commit it started on, even after a push", async () => {
+  const { tool, store } = await setup();
+  store.setLifecycle("pr-1", { verifyingSince: Date.now(), verifyingHead: "sha2", latestHeadSha: "sha3" });
+  expect(await tool("assess_feedback", { items: [{ id: "t1", verdict: "addressed", evidence: "Fixed" }] })).toContain("for sha2");
+  expect(store.getAssessment("pr-1", "sha2").items).toHaveLength(1);
+  expect(store.getAssessment("pr-1", "sha3").items).toHaveLength(0);
+});
+
+test("read_file only reads repo-relative paths", async () => {
+  const { tool } = await setup();
+  for (const path of ["../../user", "a/../../b", "/etc/passwd", "a//b", "./a.ts"]) {
+    expect(await tool("read_file", { path })).toContain("isn't a repo-relative file path");
+  }
+  expect(runGh.mock.calls.some(([args]) => String(args.at(-1)).includes(".."))).toBe(false);
+});
+
+test("submitting records the review's GitHub id, and the sync recognizes it", async () => {
+  const { factsUpdate } = await import("./turn-signals");
+  const meta = { targetKey: "pr-1", kind: "pr" as const, status: "ready" as const, createdAt: 1, submittedVerdict: "COMMENT" as const, submittedAt: 10_000, submittedHeadSha: "sha2", submittedReviewId: "PRR_new" };
+  const base = { targetKey: "pr-1", repo: "acme/web", number: 1, state: "OPEN" as const, isDraft: false, title: "T", url: "u", author: "alice", baseRefName: "main", headRefName: "h",
+    headSha: "sha2", updatedAt: 1, ci: "pass" as const, otherOpinions: [], requests: [], requestRemovedAt: null, requestPending: null, mention: null, commits: ["sha1", "sha2"] };
+  // GitHub's clock says the comment came 3s before bb stamped it; the id still matches, and changes requested stands.
+  const mine = [{ id: "PRR_old", state: "CHANGES_REQUESTED" as const, submittedAt: 1_000, sha: "sha1", body: "Fix it" }, { id: "PRR_new", state: "COMMENTED" as const, submittedAt: 7_000, sha: "sha2", body: "Still waiting" }];
+  expect(factsUpdate(meta, { ...base, myReviews: mine }, "me", 20_000, 20_000)).toMatchObject({ submittedVerdict: "REQUEST_CHANGES", submittedAt: 7_000, submittedReviewId: null });
+  // Until GitHub reports it, the local receipt stands.
+  expect(factsUpdate(meta, { ...base, myReviews: mine.slice(0, 1) }, "me", 20_000, 20_000)).not.toHaveProperty("submittedVerdict");
 });

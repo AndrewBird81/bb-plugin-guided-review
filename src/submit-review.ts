@@ -48,11 +48,14 @@ export function createReviewSubmitter(store: Store, run: typeof runGh) {
       });
       if (result.code !== 0) return { ok: false, error: ghErrorMessage(result) };
       let reviewer: string | undefined;
+      let reviewId: string | null = null;
       try {
         const receipt = JSON.parse(result.stdout);
         if (typeof receipt?.user?.login === "string") reviewer = receipt.user.login;
+        // The review's GraphQL id, to recognize it when the sync reads it back.
+        if (typeof receipt?.node_id === "string") reviewId = receipt.node_id;
       } catch { /* A successful response still records the submitted verdict. */ }
-      store.setLifecycle(targetKey, { submittedVerdict: draft.verdict, submittedAt: Date.now(), submittedHeadSha: m.headSha, ...(reviewer ? { reviewer } : {}) });
+      store.setLifecycle(targetKey, { submittedVerdict: draft.verdict, submittedAt: Date.now(), submittedHeadSha: m.headSha, submittedReviewId: reviewId, ...(reviewer ? { reviewer } : {}) });
       store.clearSubmittedDraft(draft);
       return { ok: true };
     } catch (error) {

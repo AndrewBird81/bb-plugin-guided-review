@@ -35,9 +35,8 @@ test("prFactsQuery aliases each PR and passes owner, name, and number as variabl
 test("parsePrFacts normalizes a captured cli/cli response, dropping reply-only reviews", () => {
   const facts = parsePrFacts(cli9083, [ref(9083)], "andyfeller", noTeams).get("pr-9083")!;
   expect(facts).toMatchObject({
-    repo: "cli/cli", number: 9083, state: "CLOSED", author: "wingleung", ci: "none", reviewDecision: "CHANGES_REQUESTED",
+    repo: "cli/cli", number: 9083, state: "CLOSED", author: "wingleung", ci: "none",
     headSha: "97b10370e1dec2f7be3665646d9a7b088edb180e", requestPending: { via: "user" },
-    readyAt: Date.parse("2024-06-02T10:28:20Z"), draftAt: null, dismissedAt: null, forcePushedAt: null,
     mention: { at: Date.parse("2024-08-25T07:01:13Z"), by: "wingleung" },
     otherOpinions: [{ login: "williammartin", state: "CHANGES_REQUESTED" }],
   });
@@ -99,20 +98,6 @@ test("requestPending prefers a direct request over a team one", () => {
   expect(one(pending(team("acme", "infra"), null), "me", teams).requestPending).toBeNull();
 });
 
-test("event times take the latest of each kind; dismissals count only for the viewer's reviews", () => {
-  const ev = (__typename: string, createdAt: string, extra = {}) => ({ __typename, createdAt, ...extra });
-  const facts = one(pr({ events: { nodes: [
-    ev("ConvertToDraftEvent", "2026-10-01T00:00:00Z"), ev("ReadyForReviewEvent", "2026-10-02T00:00:00Z"),
-    ev("ConvertToDraftEvent", "2026-10-03T00:00:00Z"), ev("HeadRefForcePushedEvent", "2026-10-04T00:00:00Z"),
-    ev("ReviewDismissedEvent", "2026-10-05T00:00:00Z", { review: { author: { login: "Me" } } }),
-    ev("ReviewDismissedEvent", "2026-10-06T00:00:00Z", { review: { author: { login: "bob" } } }),
-  ] } }));
-  expect(facts).toMatchObject({
-    draftAt: Date.parse("2026-10-03T00:00:00Z"), readyAt: Date.parse("2026-10-02T00:00:00Z"),
-    forcePushedAt: Date.parse("2026-10-04T00:00:00Z"), dismissedAt: Date.parse("2026-10-05T00:00:00Z"),
-  });
-});
-
 test("otherOpinions leaves out the viewer, bots, and plain comments", () => {
   const opinion = (state: string, author: unknown) => ({ state, author });
   const facts = one(pr({ latestOpinionatedReviews: { nodes: [
@@ -128,13 +113,16 @@ test("mention is the latest conversation comment by another person that mentions
   const facts = one(pr({ conversation: { nodes: [
     comment(user("bob"), "cc @me", "2026-10-01T00:00:00Z"),
     comment(user("carol"), "@Me can you look?", "2026-10-02T00:00:00Z"),
-    comment(user("me"), "@me note to self", "2026-10-03T00:00:00Z"),
+    comment(user("me"), "@me note to self", "2026-09-30T00:00:00Z"),
     comment({ __typename: "Bot", login: "github-actions" }, "@me deploy ready", "2026-10-04T00:00:00Z"),
     comment(user("dependabot[bot]"), "@me bump", "2026-10-05T00:00:00Z"),
     comment(user("dave"), "mail me@me.dev", "2026-10-06T00:00:00Z"),
     comment(null, "@me ghost", "2026-10-07T00:00:00Z"),
   ] } }));
   expect(facts.mention).toEqual({ at: Date.parse("2026-10-02T00:00:00Z"), by: "carol" });
+  // Your own comment after a mention answers it.
+  const answered = one(pr({ conversation: { nodes: [comment(user("carol"), "@me can you look?", "2026-10-02T00:00:00Z"), comment(user("me"), "Looking now", "2026-10-03T00:00:00Z")] } }));
+  expect(answered.mention).toBeNull();
 });
 
 test("mentions matches a whole handle only", () => {
@@ -208,4 +196,16 @@ test("fetchPrFacts reads partial data from a non-zero gh exit", async () => {
 test("fetchPrFacts rejects on a transport failure", async () => {
   const run = vi.fn(async () => ({ code: 1, stderr: "error connecting to api.github.com", stdout: "" }));
   await expect(fetchPrFacts(run, [ref(1)], "me", noTeams)).rejects.toThrow(/error connecting/);
+});
+
+test("a failed batch leaves its PRs out; only all batches failing rejects", async () => {
+  const refs = Array.from({ length: 12 }, (_, i) => ref(i + 1));
+  let call = 0;
+  const run = vi.fn(async () => (++call === 1
+    ? { code: 0, stderr: "", stdout: JSON.stringify({ data: Object.fromEntries(refs.slice(0, 10).map((_, i) => [`p${i}`, { pullRequest: pr({ number: i + 1 }) }])) }) }
+    : { code: 1, stderr: "rate limited", stdout: "" }));
+  const result = await fetchPrFacts(run as any, refs, "me", noTeams);
+  expect(result.size).toBe(10);
+  expect(result.has("pr-11")).toBe(false);
+  await expect(fetchPrFacts(vi.fn(async () => ({ code: 1, stderr: "offline", stdout: "" })) as any, refs, "me", noTeams)).rejects.toThrow(/offline/);
 });

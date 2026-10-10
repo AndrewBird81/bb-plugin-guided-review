@@ -40,8 +40,12 @@ export async function rerunReview(deps: Deps, targetKey: string, options: { noti
     return { ok: false, error: "Review has no re-runnable target." };
   }
   if (!patch.trim()) return { ok: false, error: "No changes found." };
+  // The review may have been deleted while GitHub answered; don't bring it back.
+  if (!deps.store.getReview(targetKey)) return { ok: false, error: "This review was deleted." };
 
   const previous = deps.store.readPatch(targetKey, 0, deps.store.readPatch(targetKey, 0, 0).total).text;
+  // If the new guide fails, the current one comes back.
+  deps.store.backupGuide(targetKey);
   const next = ensureGitHeaders(patch);
   deps.store.savePatch(targetKey, next);
   deps.store.saveReview({ ...m, status: "generating" });

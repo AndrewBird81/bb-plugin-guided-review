@@ -365,6 +365,8 @@ export default async function plugin(bb: BbPluginApi) {
     async rereview({ targetKey }) {
       await sync.one(targetKey, true);
       if (store.getReview(targetKey)?.archivedAt) return { ok: false, error: "This PR is archived. Its guide and conversation are still available." };
+      // Reading the PR may have started an automatic rebuild already.
+      if (store.getReview(targetKey)?.status === "generating") return { ok: true };
       return rerunReview({ bb, store, gh: { runGh, runGit } }, targetKey);
     },
     archiveReview({ targetKey, archived }) {
@@ -679,7 +681,7 @@ export default async function plugin(bb: BbPluginApi) {
     // A feedback check ends with the assistant's turn; an alert waiting for it can go now.
     const checked = assistantReview(store, thread.id);
     if (checked && store.getReview(checked)?.verifyingSince) {
-      store.setLifecycle(checked, { verifyingSince: null, preparedAt: Date.now() });
+      store.setLifecycle(checked, { verifyingSince: null, verifyingHead: null, preparedAt: Date.now() });
       await sync.evaluate(checked);
       bb.realtime.publish(`feedback:${checked}`, { ts: Date.now() });
     }

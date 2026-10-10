@@ -197,3 +197,19 @@ test("a rebuilt guide for a PR you reviewed checks your feedback instead of revi
   // A first review gets neither.
   expect(buildGenerationPrompt("pr-2", "g", defaultPreferences)).not.toContain("sinceReview");
 });
+
+test("a failed rebuild keeps the guide you had", async () => {
+  const { generateGuide } = await import("./generate");
+  const { bb, harness } = createFakePluginHost({ pluginId: "guided-review", sdk: { threads: { spawn: async () => ({ id: "worker" }), archive: async () => {}, stop: async () => {} } } as any });
+  const store = createStore(bb);
+  store.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, headSha: "sha1", status: "ready", createdAt: 1, projectId: "p1" });
+  store.savePatch("pr-1", patch);
+  store.saveGuide("pr-1", { title: "Kept", intent: "I", sections: [], unplacedFiles: [] });
+  store.backupGuide("pr-1");
+  store.savePatch("pr-1", "diff --git a/b.ts b/b.ts\n");
+  harness.inspection.sdk.stub("threads.wait", async () => { throw new Error("worker timed out"); });
+  await generateGuide(bb, store, "pr-1", "p1", { notify: false });
+  expect(store.getReview("pr-1")?.status).toBe("error");
+  expect(store.getGuide("pr-1")?.title).toBe("Kept");
+  expect(store.readPatch("pr-1").text).toBe(patch);
+});

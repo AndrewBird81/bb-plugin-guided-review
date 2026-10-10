@@ -86,3 +86,29 @@ test("a transport failure or server error rejects", async () => {
   await expect(createNotificationGate(vi.fn(async () => ({ code: 1, stdout: "", stderr: "error connecting to api.github.com" }))).poll()).rejects.toThrow(/connecting/);
   await expect(createNotificationGate(vi.fn(async () => ({ code: 1, stdout: headers("502 Bad Gateway"), stderr: "gh: HTTP 502" }))).poll()).rejects.toThrow(/502/);
 });
+
+test("reset forgets Last-Modified, the poll interval, and an unsupported token", async () => {
+  const { createNotificationGate } = await import("./notifications");
+  const calls: string[][] = [];
+  let status = 200;
+  const run = async (args: string[]) => {
+    calls.push(args);
+    const body = status === 200 ? "[]" : "";
+    return { code: status === 200 ? 0 : 1, stderr: "", stdout: `HTTP/2.0 ${status} X\r\nLast-Modified: Mon, 01 Jan 2026 00:00:00 GMT\r\nX-Poll-Interval: 60\r\n\r\n${body}` };
+  };
+  let t = 0;
+  const gate = createNotificationGate(run as any, () => t);
+  await gate.poll();
+  t = 61_000;
+  await gate.poll();
+  expect(calls[1]).toContain("If-Modified-Since: Mon, 01 Jan 2026 00:00:00 GMT");
+  gate.reset!();
+  await gate.poll();
+  expect(calls[2].join(" ")).not.toContain("If-Modified-Since");
+  status = 403;
+  t = 200_000;
+  expect(await gate.poll()).toEqual({ kind: "unsupported" });
+  gate.reset!();
+  status = 200;
+  expect((await gate.poll()).kind).toBe("changed");
+});

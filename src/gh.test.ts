@@ -117,3 +117,12 @@ test("unresolve thread args build a graphql mutation with the thread id as a raw
   expect(args).toContain("id=THREAD_ID");
   expect(args[args.indexOf("id=THREAD_ID") - 1]).toBe("-f");
 });
+
+test("a hung command is killed after its timeout", async () => {
+  const { runGit } = await import("./gh");
+  const started = Date.now();
+  const result = await runGit(["-c", "alias.wait=!sleep 5", "wait"], { timeoutMs: 200 });
+  expect(result.code).toBe(124);
+  expect(result.stderr).toMatch(/timed out/);
+  expect(Date.now() - started).toBeLessThan(3000);
+});

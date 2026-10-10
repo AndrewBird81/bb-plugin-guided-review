@@ -55,7 +55,9 @@ export function ghUnresolveThreadArgs(threadId: string): string[] {
     "-f", `id=${threadId}`];
 }
 
-interface RunOpts { cwd?: string; stdin?: string; authToken?: string }
+interface RunOpts { cwd?: string; stdin?: string; authToken?: string; timeoutMs?: number }
+/** A hung `gh` or `git` mustn't stall the review sync; long diffs still finish well inside this. */
+const DEFAULT_TIMEOUT_MS = 120_000;
 interface RunResult { stdout: string; stderr: string; code: number }
 
 function run(bin: string, args: string[], opts: RunOpts = {}): Promise<RunResult> {
@@ -64,11 +66,14 @@ function run(bin: string, args: string[], opts: RunOpts = {}): Promise<RunResult
     // redirect REST requests or account selection to an enterprise host.
     const child = spawn(bin, args, { cwd: opts.cwd, env: { ...process.env, ...(opts.authToken ? { GH_TOKEN: opts.authToken } : {}), GH_HOST: "github.com", GH_PROMPT_DISABLED: "1", GIT_TERMINAL_PROMPT: "0" } });
     let stdout = "", stderr = "";
+    const limit = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    // Settle at the deadline: a grandchild holding the pipes open would delay "close".
+    const timer = setTimeout(() => { child.kill("SIGKILL"); resolve({ stdout, stderr: `${bin} timed out after ${Math.round(limit / 1000)}s`, code: 124 }); }, limit);
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));
-    child.on("error", (error) => resolve({ stdout, stderr: `${bin} could not start: ${error.message}`, code: 1 }));
+    child.on("error", (error) => { clearTimeout(timer); resolve({ stdout, stderr: `${bin} could not start: ${error.message}`, code: 1 }); });
     child.stdin.on("error", () => {}); // A failed spawn/early exit can close stdin first.
-    child.on("close", (code) => resolve({ stdout, stderr, code: code ?? 1 }));
+    child.on("close", (code) => { clearTimeout(timer); resolve({ stdout, stderr, code: code ?? 1 }); });
     if (opts.stdin !== undefined) child.stdin.end(opts.stdin);
     else child.stdin.end();
   });

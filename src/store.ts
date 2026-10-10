@@ -38,6 +38,16 @@ export interface ReviewLifecycle {
   preparedAt?: number | null;
   /** Your latest review summaries, newest last, for the assistant. */
   reviewBodies?: Array<{ state: string; at: number; body: string }>;
+  /** When bb first read the PR's state. Earlier events don't alert or start work. */
+  watchingSince?: number | null;
+  /** Found on GitHub with a request for your review that you haven't been told about. */
+  newRequest?: boolean | null;
+  /** A turn from a passing state (feedback handled, looks ready) that holds until you act. */
+  heldTurn?: { reason: import("../lib/turn").TurnReason; label: string; signal: string; at: number } | null;
+  /** The GitHub id of the review submitted here, to recognize it once GitHub reports it. */
+  submittedReviewId?: string | null;
+  /** The head commit the assistant is checking. */
+  verifyingHead?: string | null;
 }
 
 export interface ReviewMeta extends ReviewLifecycle {
@@ -104,6 +114,11 @@ export interface Store {
   saveGuide(targetKey: string, guide: Guide): void;
   getGuide(targetKey: string): Guide | null;
   beginGeneration(targetKey: string): string;
+  /** Keep the current guide and diff, to put back if regenerating them fails. */
+  backupGuide(targetKey: string): void;
+  /** Put the kept guide and diff back. False when there's nothing kept. */
+  restoreGuide(targetKey: string): boolean;
+  dropGuideBackup(targetKey: string): void;
   isCurrentGeneration(targetKey: string, generationId: string): boolean;
   interruptGenerations(): void;
   getDraft(targetKey: string): Draft;
@@ -149,6 +164,8 @@ export interface Store {
   saveFeedbackThreads(targetKey: string, threads: FeedbackThread[], prUpdatedAt: number | null): void;
   listFeedbackThreads(targetKey: string): Array<FeedbackThread & { resolvedSeenAt: number | null }>;
   feedbackFetched(targetKey: string): { fetchedAt: number; prUpdatedAt: number | null } | null;
+  /** Forget when every review's threads were read, so they're read again (after a GitHub account switch). */
+  clearFeedbackFetches(): void;
   // The assistant's check of your feedback, per head commit.
   saveAssessmentItems(targetKey: string, headSha: string, items: AssessmentItem[]): void;
   saveAssessmentRun(targetKey: string, run: AssessmentRun): void;
@@ -225,6 +242,7 @@ export function createStore(bb: BbPluginApi): Store {
       PRIMARY KEY (target_key, thread_id))`,
     `CREATE TABLE IF NOT EXISTS discovery_ignores (target_key TEXT PRIMARY KEY, ignored_at INTEGER NOT NULL)`,
     `ALTER TABLE draft_comment_revisions ADD COLUMN code TEXT`,
+    `CREATE TABLE IF NOT EXISTS guide_backups (target_key TEXT PRIMARY KEY, data TEXT NOT NULL)`,
   ]);
   const at = (k: string, { file, line, side }: CommentLocation) => [k, file, line, side] as const;
   const hasDiscussion = (k: string, location: CommentLocation) =>
@@ -344,11 +362,36 @@ export function createStore(bb: BbPluginApi): Store {
     },
     interruptGenerations() {
       db.transaction(() => {
+        // An interrupted rebuild gets its previous guide back.
+        for (const { target_key } of db.prepare(`SELECT target_key FROM reviews WHERE status='generating'`).all() as Array<{ target_key: string }>) this.restoreGuide(target_key);
         // Completed identities are also durable notification receipts. Only
         // workers interrupted by this reload lose the right to finalize.
         db.prepare(`DELETE FROM generations WHERE target_key IN (SELECT target_key FROM reviews WHERE status='generating')`).run();
         db.prepare(`UPDATE reviews SET status='error' WHERE status='generating'`).run();
       })();
+    },
+    backupGuide(k) {
+      const guide = this.getGuide(k);
+      const review = this.getReview(k);
+      if (!guide || !review) return;
+      const patch = this.readPatch(k, 0, this.readPatch(k, 0, 0).total).text;
+      db.prepare(`INSERT INTO guide_backups VALUES (?,?) ON CONFLICT(target_key) DO UPDATE SET data=excluded.data`)
+        .run(k, JSON.stringify({ guide, patch, headSha: review.headSha ?? null, base: review.base ?? null, head: review.head ?? null, gitRef: review.gitRef ?? null }));
+    },
+    restoreGuide(k) {
+      const row = db.prepare(`SELECT data FROM guide_backups WHERE target_key=?`).get(k) as { data: string } | undefined;
+      if (!row) return false;
+      const kept = JSON.parse(row.data);
+      db.transaction(() => {
+        this.savePatch(k, kept.patch);
+        this.saveGuide(k, kept.guide);
+        db.prepare(`UPDATE reviews SET head_sha=?, base=?, head=?, git_ref=? WHERE target_key=?`).run(kept.headSha, kept.base, kept.head, kept.gitRef, k);
+        db.prepare(`DELETE FROM guide_backups WHERE target_key=?`).run(k);
+      })();
+      return true;
+    },
+    dropGuideBackup(k) {
+      db.prepare(`DELETE FROM guide_backups WHERE target_key=?`).run(k);
     },
     getDraft(k) {
       const row: any = db.prepare(`SELECT * FROM drafts WHERE target_key=?`).get(k);
@@ -516,12 +559,15 @@ export function createStore(bb: BbPluginApi): Store {
     saveFeedbackThreads(k, threads, prUpdatedAt) {
       const now = Date.now();
       db.transaction(() => {
+        const first = !db.prepare(`SELECT 1 FROM feedback_fetches WHERE target_key=?`).get(k);
         const previous = new Map((db.prepare(`SELECT thread_id, resolved_seen_at FROM feedback_threads WHERE target_key=?`).all(k) as any[])
           .map((row) => [row.thread_id as string, row.resolved_seen_at as number | null]));
         db.prepare(`DELETE FROM feedback_threads WHERE target_key=?`).run(k);
         const insert = db.prepare(`INSERT INTO feedback_threads VALUES (?,?,?,?)`);
         // When a thread was resolved isn't in GitHub's data; the first time bb saw it resolved stands in.
-        for (const thread of threads) insert.run(k, thread.id, JSON.stringify(thread), thread.isResolved ? previous.get(thread.id) ?? now : null);
+        // On the first read it was resolved some time before, so its last activity stands in instead.
+        const seen = (thread: FeedbackThread) => previous.get(thread.id) ?? (first ? Math.max(thread.createdAt, ...thread.replies.map((r) => r.createdAt)) : now);
+        for (const thread of threads) insert.run(k, thread.id, JSON.stringify(thread), thread.isResolved ? seen(thread) : null);
         db.prepare(`INSERT INTO feedback_fetches VALUES (?,?,?) ON CONFLICT(target_key) DO UPDATE SET fetched_at=excluded.fetched_at, pr_updated_at=excluded.pr_updated_at`)
           .run(k, now, prUpdatedAt);
       })();
@@ -530,6 +576,9 @@ export function createStore(bb: BbPluginApi): Store {
       return (db.prepare(`SELECT data, resolved_seen_at FROM feedback_threads WHERE target_key=?`).all(k) as any[])
         .map((row) => ({ ...(JSON.parse(row.data) as FeedbackThread), resolvedSeenAt: row.resolved_seen_at ?? null }))
         .sort((a, b) => a.createdAt - b.createdAt);
+    },
+    clearFeedbackFetches() {
+      db.prepare(`DELETE FROM feedback_fetches`).run();
     },
     feedbackFetched(k) {
       const row = db.prepare(`SELECT fetched_at, pr_updated_at FROM feedback_fetches WHERE target_key=?`).get(k) as any;
@@ -600,7 +649,7 @@ const REVIEW_TABLES = [
   "reviews", "patches", "guides", "drafts", "file_views", "agent_threads", "agent_messages",
   "generations", "draft_comment_revisions", "review_lifecycle", "reviewer_notes", "assistant_threads", "review_context",
   "discussion_entries", "discussion_waits", "review_snapshots", "feedback_threads", "feedback_fetches",
-  "assessment_items", "assessment_runs", "reply_drafts",
+  "assessment_items", "assessment_runs", "reply_drafts", "guide_backups",
 ] as const;
 
 function patchHash(patch: string) { return createHash("sha256").update(patch).digest("hex"); }

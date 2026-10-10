@@ -11,9 +11,8 @@ const T0 = Date.parse("2026-10-10T12:00:00Z");
 function facts(ref: PrRef, extra: Partial<PrFacts> = {}): PrFacts {
   return {
     targetKey: ref.targetKey, repo: ref.repo, number: ref.number, state: "OPEN", isDraft: false, title: "Expire cache entries", url: "https://github.com/acme/web/pull/1",
-    author: "alice", baseRefName: "main", headRefName: "cache", headSha: "sha1", updatedAt: 1, ci: "pass", reviewDecision: null,
-    myReviews: [], otherOpinions: [], requests: [], requestRemovedAt: null, requestPending: null,
-    readyAt: null, draftAt: null, dismissedAt: null, forcePushedAt: null, mention: null, commits: ["sha1"], ...extra,
+    author: "alice", baseRefName: "main", headRefName: "cache", headSha: "sha1", updatedAt: 1, ci: "pass",
+    myReviews: [], otherOpinions: [], requests: [], requestRemovedAt: null, requestPending: null, mention: null, commits: ["sha1"], ...extra,
   };
 }
 const review = (state: "APPROVED" | "CHANGES_REQUESTED" | "COMMENTED" | "DISMISSED", at: number, sha = "sha1", body = "") => ({ id: `r-${at}`, state, submittedAt: at, sha, body });
@@ -130,7 +129,7 @@ test("a dismissed approval returns to the review queue", async () => {
   expect(sync.turnOf(store.getReview("pr-1")!)).toMatchObject({ group: "needs", reason: "dismissed" });
 });
 
-test("the first pass after an upgrade records today's turns without alerting", async () => {
+test("the first read of a review records today's turns without alerting", async () => {
   const { sync, published, actions } = setup({ reviewed: true, pr: { headSha: "sha2", commits: ["sha1", "sha2"], requests: [{ at: T0 - HOUR, by: "alice", via: "user" }] } });
   await sync.all();
   expect(published).toHaveLength(0);
@@ -285,4 +284,105 @@ test("evaluations of one review run one at a time, so a signal is prepared once"
   release();
   await Promise.all([pass, again]);
   expect(s.actions.prepare).toHaveBeenCalledTimes(1);
+});
+
+test("threads resolved before bb first read them don't count as just handled", async () => {
+  // Reviewed long ago; every thread was resolved before the upgrade; new commits and quiet since.
+  const old = { ...thread("t1", "resolved"), replies: [{ author: "alice", bot: false, mine: false, body: "Done", createdAt: T0 - 4 * HOUR }] };
+  const s = setup({ reviewed: true, threads: [old], pr: { headSha: "sha2", commits: ["sha1", "sha2"], updatedAt: 2 } });
+  await s.sync.all();
+  s.at(1);
+  await s.sync.all();
+  // It shows as your turn, but alerts and prepares nothing: it happened before bb was watching.
+  expect(s.sync.turnOf(s.store.getReview("pr-1")!)).toMatchObject({ group: "needs", reason: "handled" });
+  expect(s.published).toHaveLength(0);
+  expect(s.actions.prepare).not.toHaveBeenCalled();
+});
+
+test("a failed automatic re-review still sends its alert", async () => {
+  const s = setup({ reviewed: true });
+  await s.sync.all();
+  s.pr({ headSha: "sha2", commits: ["sha1", "sha2"], requests: [{ at: T0 + 0.1 * HOUR, by: "alice", via: "user" }] });
+  vi.mocked(s.actions.prepare).mockImplementation(async () => { s.store.setStatus("pr-1", "generating"); return true; });
+  s.at(0.2);
+  await s.sync.all(true);
+  expect(s.published).toHaveLength(0);
+  // The rebuild fails.
+  s.store.setStatus("pr-1", "error");
+  await s.sync.evaluate("pr-1");
+  await vi.waitFor(() => expect(s.published).toHaveLength(1));
+  expect(s.published[0].body).toContain("re-requested your review");
+});
+
+test("feedback handled holds through another push, without alerting or preparing again", async () => {
+  const s = setup({ reviewed: true, threads: [thread("t1", "open")] });
+  vi.mocked(s.actions.prepare).mockResolvedValue(false);
+  await s.sync.all();
+  s.pr({ headSha: "sha2", commits: ["sha1", "sha2"], updatedAt: 2 });
+  s.threads([thread("t1", "answered", T0 + 0.1 * HOUR)]);
+  s.at(0.15);
+  await s.sync.all(true);
+  s.at(0.5);
+  await s.sync.all();
+  await vi.waitFor(() => expect(s.published).toHaveLength(1));
+  const prepared = vi.mocked(s.actions.prepare).mock.calls.length;
+  // Another push restarts the quiet period, but the turn already came to you.
+  s.pr({ headSha: "sha3", commits: ["sha1", "sha2", "sha3"], updatedAt: 3 });
+  s.at(0.55);
+  await s.sync.all(true);
+  s.at(1);
+  await s.sync.all(true);
+  expect(s.sync.turnOf(s.store.getReview("pr-1")!)).toMatchObject({ group: "needs", reason: "handled" });
+  expect(s.published).toHaveLength(1);
+  expect(s.dismissed).toHaveLength(0);
+  expect(vi.mocked(s.actions.prepare).mock.calls.length).toBe(prepared);
+});
+
+test("discovery only fills the list the first time for an account", async () => {
+  const s = setup();
+  vi.mocked(s.github.discover).mockResolvedValue([
+    { repo: "acme/api", number: 7, title: "Add tenant scoping", url: "u", author: "bob", updatedAt: 1, isDraft: false, requested: true, reviewed: false },
+  ]);
+  vi.mocked(s.github.facts).mockImplementation(async (refs) => new Map(refs.map((ref) => [ref.targetKey, facts(ref, ref.number === 7
+    ? { requestPending: { via: "user" }, requests: [{ at: T0 - HOUR, by: "bob", via: "user" }] } : {})])));
+  await s.sync.all();
+  expect(s.store.listReviews().some((r) => r.repo === "acme/api")).toBe(true);
+  expect(s.published).toHaveLength(0);
+});
+
+test("re-reviews of PRs found on GitHub start guides only in auto-start repositories", async () => {
+  const s = setup({ reviewed: true });
+  s.store.setStatus("pr-1", "tracked");
+  await s.sync.all();
+  s.pr({ headSha: "sha2", commits: ["sha1", "sha2"], requests: [{ at: T0 + 0.1 * HOUR, by: "alice", via: "user" }] });
+  s.at(0.2);
+  await s.sync.all(true);
+  expect(s.actions.prepare).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(s.published).toHaveLength(1));
+  // With the repository listed, the next request prepares it.
+  s.store.savePreferences({ ...defaultPreferences, autoStartRepos: ["acme/*"] }, 0);
+  s.pr({ headSha: "sha3", commits: ["sha1", "sha2", "sha3"], requests: [{ at: T0 + 0.3 * HOUR, by: "alice", via: "user" }] });
+  s.at(0.4);
+  await s.sync.all(true);
+  expect(s.actions.prepare).toHaveBeenCalledWith("pr-1", "re-requested");
+});
+
+test("team requests auto-start in listed repositories", async () => {
+  const s = setup({ preferences: { autoStartRepos: ["acme/web"] } });
+  s.store.setStatus("pr-1", "tracked");
+  s.store.setLifecycle("pr-1", { newRequest: true });
+  s.pr({ requestPending: { via: "team", team: "acme/web-core" }, requests: [{ at: T0 - HOUR, by: "dan", via: "team", team: "acme/web-core" }] });
+  await s.sync.all();
+  expect(s.actions.autoStart).toHaveBeenCalledWith("pr-1");
+});
+
+test("switching GitHub accounts reads threads and notifications again", async () => {
+  const s = setup({ reviewed: true, threads: [thread("t1", "open")] });
+  const reset = vi.fn();
+  (s.github.gate as any).reset = reset;
+  await s.sync.all();
+  expect(s.store.feedbackFetched("pr-1")).not.toBeNull();
+  s.sync.resetViewer();
+  expect(reset).toHaveBeenCalled();
+  expect(s.store.feedbackFetched("pr-1")).toBeNull();
 });
