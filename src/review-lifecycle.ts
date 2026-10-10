@@ -56,6 +56,8 @@ const DISCOVER_EVERY = 5 * MINUTE;
 const DISCOVERED = "discovery:account";
 /** Threads are re-read when the PR changes, and at least this often while it's active. */
 const THREADS_EVERY = 10 * MINUTE;
+/** How often a re-review that couldn't start is tried again. */
+const RETRY_PREPARE = 10 * MINUTE;
 /** Turns that prepare their re-review ahead of time. */
 const PREPARE = new Set<TurnReason>(["re-requested", "handled", "looks-ready", "dismissed"]);
 
@@ -149,7 +151,8 @@ export function createReviewSync(bb: BbPluginApi, store: Store, run: typeof runG
     const before = store.getReview(key);
     if (!before || before.prState === "MERGED" && facts.state !== "MERGED") return;
     // What happened before bb first read the PR is history: it shows, but doesn't alert or start work.
-    if (before.watchingSince == null) store.setLifecycle(key, { watchingSince: clock() });
+    const firstRead = before.watchingSince == null;
+    if (firstRead) store.setLifecycle(key, { watchingSince: startedAt, watchedHead: facts.headSha });
     // Keep what the list shows current; a review found on GitHub learns its PR here.
     const meta = { title: facts.title || before.title, url: facts.url || before.url, author: facts.author ?? before.author, base: before.base ?? facts.baseRefName, head: before.head ?? facts.headRefName };
     if (meta.title !== before.title || meta.url !== before.url || meta.author !== before.author || meta.base !== before.base || meta.head !== before.head) {
@@ -171,7 +174,7 @@ export function createReviewSync(bb: BbPluginApi, store: Store, run: typeof runG
       }
       store.setLifecycle(key, { signals: { ...store.getReview(key)!.signals, ...threadSignals(store.listFeedbackThreads(key)) } });
     }
-    await evaluate(key);
+    await evaluate(key, firstRead);
     if (JSON.stringify(before) !== JSON.stringify(store.getReview(key))) publish(key);
   }
 
@@ -189,8 +192,8 @@ export function createReviewSync(bb: BbPluginApi, store: Store, run: typeof runG
 
   // One evaluation per review at a time: two could both see a new signal and prepare it twice.
   const evaluating = new Map<string, Promise<void>>();
-  function evaluate(key: string): Promise<void> {
-    const next = (evaluating.get(key) ?? Promise.resolve()).catch(() => {}).then(() => evaluateNow(key));
+  function evaluate(key: string, firstRead = false): Promise<void> {
+    const next = (evaluating.get(key) ?? Promise.resolve()).catch(() => {}).then(() => evaluateNow(key, firstRead));
     evaluating.set(key, next);
     void next.catch(() => {}).finally(() => { if (evaluating.get(key) === next) evaluating.delete(key); });
     return next;
@@ -201,7 +204,7 @@ export function createReviewSync(bb: BbPluginApi, store: Store, run: typeof runG
    * ALERT_WAIT), prepare re-reviews, check settled pushes, and clear the alert when it leaves Needs review.
    * Events from before bb watched the review are recorded without acting, except a new request found on GitHub.
    */
-  async function evaluateNow(key: string): Promise<void> {
+  async function evaluateNow(key: string, firstRead: boolean): Promise<void> {
     let review = store.getReview(key);
     if (!review || disposed) return;
     const now = clock();
@@ -210,28 +213,27 @@ export function createReviewSync(bb: BbPluginApi, store: Store, run: typeof runG
     const head = review.latestHeadSha ?? review.headSha ?? null;
     // A person asking again takes the review out of your archive for good.
     if (review.userArchivedAt && turn.reason === "re-requested") store.setLifecycle(key, { userArchivedAt: null });
-    if (turn.group === "needs" && turn.signal && turn.signal !== review.notifiedSignal && turn.signal !== review.pendingAlert?.signal) {
-      const watching = review.watchingSince ?? null;
-      const request = turn.reason === "requested" || turn.reason === "team-requested";
-      const act = watching !== null && (turn.eventAt === null || turn.eventAt >= watching) || request && !!review.newRequest;
-      // Handled and looks-ready come from passing states; once they're your turn, they hold until you act.
-      const held = turn.reason === "handled" || turn.reason === "looks-ready" ? { heldTurn: { reason: turn.reason, label: turn.label, signal: turn.signal, at: now } } : {};
-      if (!act) store.setLifecycle(key, { notifiedSignal: turn.signal, autoRunHead: head, newRequest: null, ...held });
-      else {
-        store.setLifecycle(key, { newRequest: null, ...held });
-        // Guides for PRs found on GitHub cost a run each; they start only in your auto-start repositories.
-        const allowed = review.status !== "tracked" || matchesRepo(preferences.autoStartRepos, review.repo);
-        let preparing = false;
-        if (actions && head && allowed && review.autoRunHead !== head && review.status !== "generating" && (PREPARE.has(turn.reason) || request && review.status === "tracked")) {
-          const previous = review.autoRunHead ?? null;
-          store.setLifecycle(key, { autoRunHead: head });
-          preparing = await (request ? actions.autoStart(key) : actions.prepare(key, turn.reason)).catch(() => false);
+    if (turn.group === "needs" && turn.signal) {
+      if (turn.signal !== review.notifiedSignal && turn.signal !== review.pendingAlert?.signal) {
+        const watching = review.watchingSince ?? null;
+        const request = turn.reason === "requested" || turn.reason === "team-requested";
+        // An event from before bb watched the PR is history; one without a time is history on the first read.
+        const recent = watching !== null && (turn.eventAt === null ? !firstRead : turn.eventAt >= watching);
+        const act = recent || request && !!review.newRequest;
+        // Handled and looks-ready come from passing states; once they're your turn, they hold until you act.
+        const held = turn.reason === "handled" || turn.reason === "looks-ready" ? { heldTurn: { reason: turn.reason, label: turn.label, signal: turn.signal, at: now } } : {};
+        if (!act) store.setLifecycle(key, { notifiedSignal: turn.signal, preparedSignal: turn.signal, newRequest: null, ...held });
+        else {
+          store.setLifecycle(key, { newRequest: null, ...held });
+          const preparing = await prepare(key, turn, head);
           if (!store.getReview(key)) return;
-          if (!preparing) store.setLifecycle(key, { autoRunHead: previous });
+          if (!turn.notify) store.setLifecycle(key, { notifiedSignal: turn.signal });
+          else if (preparing) store.setLifecycle(key, { pendingAlert: { signal: turn.signal, since: now } });
+          else await alert(key, turn);
         }
-        if (!turn.notify) store.setLifecycle(key, { notifiedSignal: turn.signal });
-        else if (preparing) store.setLifecycle(key, { pendingAlert: { signal: turn.signal, since: now } });
-        else await alert(key, turn);
+      } else if (review.preparedSignal !== turn.signal && now - (review.prepareTriedAt ?? 0) >= RETRY_PREPARE) {
+        // A re-review that couldn't start (an offline machine, a GitHub hiccup) is retried now and then.
+        await prepare(key, turn, head);
       }
     }
     review = store.getReview(key);
@@ -242,15 +244,39 @@ export function createReviewSync(bb: BbPluginApi, store: Store, run: typeof runG
       if (current.group !== "needs" || current.signal !== waiting.signal) store.setLifecycle(key, { pendingAlert: null });
       else if (now - waiting.since >= ALERT_WAIT || prepared(review, waiting.since)) await alert(key, current);
     }
-    // While you wait, the assistant checks the author's pushes once they settle.
+    // While you wait, the assistant checks the author's pushes once they settle; ones from before bb watched are history.
     const s = review.signals ?? {};
-    if (actions && preferences.pushChecks !== "off" && turn.group === "waiting" && turn.updated && head && review.status === "ready"
+    if (actions && preferences.pushChecks !== "off" && turn.group === "waiting" && turn.updated && head && head !== review.watchedHead && review.status === "ready"
       && review.autoRunHead !== head && review.assessment?.headSha !== head && s.ci !== "pending" && now - (s.headSeenAt ?? now) >= PUSH_QUIET) {
       store.setLifecycle(key, { autoRunHead: head });
       if (!await actions.checkPushes(key).catch(() => false) && store.getReview(key)) store.setLifecycle(key, { autoRunHead: review.autoRunHead ?? null });
     }
     if (review.turnGroup === "needs" && turn.group !== "needs") void notifications.dismiss(key);
     if (review.turnGroup !== turn.group && store.getReview(key)) store.setLifecycle(key, { turnGroup: turn.group });
+  }
+
+  /**
+   * Prepare the re-review behind a turn: rebuild an out-of-date guide and check your feedback, or
+   * start the guide for a new request. Returns whether work started; a turn that needs none counts as prepared.
+   */
+  async function prepare(key: string, turn: Turn, head: string | null): Promise<boolean> {
+    const review = store.getReview(key);
+    if (!review || !turn.signal) return false;
+    const preferences = store.getPreferences().preferences;
+    const request = turn.reason === "requested" || turn.reason === "team-requested";
+    // Guides for PRs found on GitHub cost a run each; they start only in your auto-start repositories.
+    const allowed = review.status !== "tracked" || matchesRepo(preferences.autoStartRepos, review.repo);
+    const wanted = PREPARE.has(turn.reason) || request && review.status === "tracked";
+    if (!actions || !head || !allowed || !wanted || review.status === "generating" || review.autoRunHead === head) {
+      store.setLifecycle(key, { preparedSignal: turn.signal });
+      return false;
+    }
+    const previous = review.autoRunHead ?? null;
+    store.setLifecycle(key, { autoRunHead: head, prepareTriedAt: clock() });
+    const started = await (request ? actions.autoStart(key) : actions.prepare(key, turn.reason)).catch(() => false);
+    if (!store.getReview(key)) return false;
+    store.setLifecycle(key, started ? { preparedSignal: turn.signal } : { autoRunHead: previous });
+    return started;
   }
 
   /**

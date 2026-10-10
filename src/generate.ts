@@ -80,7 +80,7 @@ export async function generateGuide(
   try {
     if (!generationId || !store.isCurrentGeneration(targetKey, generationId)) return;
     const ok = !controller.signal.aborted && store.getGuide(targetKey) !== null;
-    // A failed rebuild keeps the guide you had.
+    // A failed rebuild keeps the guide you had; a guide this run already submitted stands.
     if (ok) store.dropGuideBackup(targetKey);
     else store.restoreGuide(targetKey);
     store.setStatus(targetKey, ok ? "ready" : "error");

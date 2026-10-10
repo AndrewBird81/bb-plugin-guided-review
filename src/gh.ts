@@ -55,6 +55,7 @@ export function ghUnresolveThreadArgs(threadId: string): string[] {
     "-f", `id=${threadId}`];
 }
 
+/** timeoutMs 0 waits for as long as it takes: a write killed mid-flight may still land, and a retry would duplicate it. */
 interface RunOpts { cwd?: string; stdin?: string; authToken?: string; timeoutMs?: number }
 /** A hung `gh` or `git` mustn't stall the review sync; long diffs still finish well inside this. */
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -68,7 +69,7 @@ function run(bin: string, args: string[], opts: RunOpts = {}): Promise<RunResult
     let stdout = "", stderr = "";
     const limit = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     // Settle at the deadline: a grandchild holding the pipes open would delay "close".
-    const timer = setTimeout(() => { child.kill("SIGKILL"); resolve({ stdout, stderr: `${bin} timed out after ${Math.round(limit / 1000)}s`, code: 124 }); }, limit);
+    const timer = limit > 0 ? setTimeout(() => { child.kill("SIGKILL"); resolve({ stdout, stderr: `${bin} timed out after ${Math.round(limit / 1000)}s`, code: 124 }); }, limit) : undefined;
     child.stdout.on("data", (d) => (stdout += d));
     child.stderr.on("data", (d) => (stderr += d));
     child.on("error", (error) => { clearTimeout(timer); resolve({ stdout, stderr: `${bin} could not start: ${error.message}`, code: 1 }); });

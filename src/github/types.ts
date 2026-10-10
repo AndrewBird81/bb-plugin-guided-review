@@ -47,10 +47,8 @@ export interface PrFacts {
   myReviews: MyReview[];
   /** Every other reviewer's latest approve or changes-requested review. */
   otherOpinions: Array<{ login: string; state: "APPROVED" | "CHANGES_REQUESTED" }>;
-  /** Review requests for the viewer from the timeline, oldest first. */
+  /** Review requests for the viewer from the timeline that weren't withdrawn since, oldest first. */
   requests: ReviewRequestEvent[];
-  /** The latest removal of a review request for the viewer, or a team the viewer is on. */
-  requestRemovedAt: number | null;
   /** A request for the viewer, or a team the viewer is on, is pending now. */
   requestPending: { via: "user" | "team"; team?: string } | null;
   /** The latest comment on the PR conversation, by someone else and not a bot, that mentions the viewer after the viewer last commented there. */

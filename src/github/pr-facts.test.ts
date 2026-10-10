@@ -83,11 +83,10 @@ test("requests match the viewer case-insensitively and teams the viewer is on", 
     requested("2026-10-04T00:00:00Z", "alice", user("someone")),
     { __typename: "ReviewRequestRemovedEvent", createdAt: "2026-10-05T00:00:00Z", actor: { login: "alice" }, requestedReviewer: user("me") },
   ] } }), "me", new Set(["acme/web-core"]));
+  // The direct request was withdrawn on 10-05; the team request stands.
   expect(facts.requests).toEqual([
-    { at: Date.parse("2026-10-01T00:00:00Z"), by: "alice", via: "user" },
     { at: Date.parse("2026-10-02T00:00:00Z"), by: "alice", via: "team", team: "acme/web-core" },
   ]);
-  expect(facts.requestRemovedAt).toBe(Date.parse("2026-10-05T00:00:00Z"));
 });
 
 test("requestPending prefers a direct request over a team one", () => {
@@ -208,4 +207,13 @@ test("a failed batch leaves its PRs out; only all batches failing rejects", asyn
   expect(result.size).toBe(10);
   expect(result.has("pr-11")).toBe(false);
   await expect(fetchPrFacts(vi.fn(async () => ({ code: 1, stderr: "offline", stdout: "" })) as any, refs, "me", noTeams)).rejects.toThrow(/offline/);
+});
+
+test("a withdrawn team request doesn't hide your direct one", () => {
+  const facts = one(pr({ events: { nodes: [
+    { __typename: "ReviewRequestedEvent", createdAt: "2026-10-01T00:00:00Z", actor: { login: "alice" }, requestedReviewer: user("me") },
+    { __typename: "ReviewRequestedEvent", createdAt: "2026-10-01T00:00:01Z", actor: { login: "alice" }, requestedReviewer: team("acme", "web-core") },
+    { __typename: "ReviewRequestRemovedEvent", createdAt: "2026-10-02T00:00:00Z", actor: { login: "github" }, requestedReviewer: team("acme", "web-core") },
+  ] } }), "me", new Set(["acme/web-core"]));
+  expect(facts.requests).toEqual([{ at: Date.parse("2026-10-01T00:00:00Z"), by: "alice", via: "user" }]);
 });

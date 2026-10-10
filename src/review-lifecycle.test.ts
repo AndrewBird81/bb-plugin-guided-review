@@ -316,7 +316,8 @@ test("a failed automatic re-review still sends its alert", async () => {
 
 test("feedback handled holds through another push, without alerting or preparing again", async () => {
   const s = setup({ reviewed: true, threads: [thread("t1", "open")] });
-  vi.mocked(s.actions.prepare).mockResolvedValue(false);
+  // The re-review is prepared at once, so the alert goes straight out.
+  vi.mocked(s.actions.prepare).mockImplementation(async () => { s.store.setLifecycle("pr-1", { preparedAt: Date.now() }); return true; });
   await s.sync.all();
   s.pr({ headSha: "sha2", commits: ["sha1", "sha2"], updatedAt: 2 });
   s.threads([thread("t1", "answered", T0 + 0.1 * HOUR)]);
@@ -385,4 +386,55 @@ test("switching GitHub accounts reads threads and notifications again", async ()
   s.sync.resetViewer();
   expect(reset).toHaveBeenCalled();
   expect(s.store.feedbackFetched("pr-1")).toBeNull();
+});
+
+test("a pending request with no known time is history on the first read", async () => {
+  const s = setup({ pr: { requestPending: { via: "user" } } });
+  s.store.setStatus("pr-1", "tracked");
+  await s.sync.all();
+  expect(s.sync.turnOf(s.store.getReview("pr-1")!)).toMatchObject({ group: "needs", reason: "requested" });
+  expect(s.published).toHaveLength(0);
+});
+
+test("a dismissal bb sees happen prepares the re-review", async () => {
+  const s = setup({ pr: { myReviews: [review("APPROVED", T0 - 5 * HOUR)] } });
+  await s.sync.all();
+  s.pr({ headSha: "sha2", commits: ["sha1", "sha2"], myReviews: [review("DISMISSED", T0 - 5 * HOUR)] });
+  s.at(0.2);
+  await s.sync.all(true);
+  expect(s.sync.turnOf(s.store.getReview("pr-1")!)).toMatchObject({ reason: "dismissed" });
+  expect(s.actions.prepare).toHaveBeenCalledWith("pr-1", "dismissed");
+});
+
+test("history doesn't stop a later re-request on the same commit from being prepared", async () => {
+  // Already re-requested when bb first reads it, on sha2.
+  const s = setup({ reviewed: true, pr: { headSha: "sha2", commits: ["sha1", "sha2"], requests: [{ at: T0 - HOUR, by: "alice", via: "user" }] } });
+  await s.sync.all();
+  expect(s.actions.prepare).not.toHaveBeenCalled();
+  // A newer re-request, no new commits.
+  s.pr({ requests: [{ at: T0 + 0.1 * HOUR, by: "alice", via: "user" }] });
+  s.at(0.2);
+  await s.sync.all(true);
+  expect(s.actions.prepare).toHaveBeenCalledWith("pr-1", "re-requested");
+});
+
+test("a re-review that couldn't start is tried again later, alerting once", async () => {
+  const s = setup({ reviewed: true });
+  await s.sync.all();
+  vi.mocked(s.actions.prepare).mockResolvedValue(false);
+  s.pr({ headSha: "sha2", commits: ["sha1", "sha2"], requests: [{ at: T0 + 0.1 * HOUR, by: "alice", via: "user" }] });
+  s.at(0.2);
+  await s.sync.all(true);
+  await vi.waitFor(() => expect(s.published).toHaveLength(1));
+  s.at(0.25);
+  await s.sync.all(true);
+  expect(s.actions.prepare).toHaveBeenCalledTimes(1);
+  vi.mocked(s.actions.prepare).mockResolvedValue(true);
+  s.at(0.5);
+  await s.sync.all(true);
+  expect(s.actions.prepare).toHaveBeenCalledTimes(2);
+  s.at(1);
+  await s.sync.all(true);
+  expect(s.actions.prepare).toHaveBeenCalledTimes(2);
+  expect(s.published).toHaveLength(1);
 });

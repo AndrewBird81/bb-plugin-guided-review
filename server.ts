@@ -173,7 +173,7 @@ export default async function plugin(bb: BbPluginApi) {
         const review = store.getReview(targetKey);
         const thread = store.listFeedbackThreads(targetKey).find((t) => t.id === threadId);
         if (!review?.repo || !review.number || !thread) return { ok: false, error: "That thread isn't part of this review anymore. Refresh and try again." };
-        const r = await runGh(ghReplyThreadArgs(review.repo, review.number, thread.commentId), { stdin: JSON.stringify({ body }) });
+        const r = await runGh(ghReplyThreadArgs(review.repo, review.number, thread.commentId), { stdin: JSON.stringify({ body }), timeoutMs: 0 });
         if (r.code !== 0) return { ok: false, error: ghErrorMessage(r) };
         store.deleteReplyDraft(targetKey, threadId);
         await refreshThreads(review).catch(() => {});
@@ -336,15 +336,15 @@ export default async function plugin(bb: BbPluginApi) {
     async replyToThread({ targetKey, inReplyTo, body }) {
       const m = store.getReview(targetKey);
       if (!m || m.kind !== "pr" || !m.number || !m.repo) return { ok: false, error: "Not a PR." };
-      const r = await runGh(ghReplyThreadArgs(m.repo, m.number, inReplyTo), { stdin: JSON.stringify({ body }) });
+      const r = await runGh(ghReplyThreadArgs(m.repo, m.number, inReplyTo), { stdin: JSON.stringify({ body }), timeoutMs: 0 });
       return r.code === 0 ? { ok: true } : { ok: false, error: ghErrorMessage(r) };
     },
     async resolveThread({ threadId }) {
-      const r = await runGh(ghResolveThreadArgs(threadId));
+      const r = await runGh(ghResolveThreadArgs(threadId), { timeoutMs: 0 });
       return r.code === 0 ? { ok: true } : { ok: false, error: ghErrorMessage(r) };
     },
     async unresolveThread({ threadId }) {
-      const r = await runGh(ghUnresolveThreadArgs(threadId));
+      const r = await runGh(ghUnresolveThreadArgs(threadId), { timeoutMs: 0 });
       return r.code === 0 ? { ok: true } : { ok: false, error: ghErrorMessage(r) };
     },
     async checkForUpdates({ targetKey }) {
@@ -438,6 +438,8 @@ export default async function plugin(bb: BbPluginApi) {
         // The diff you reviewed is what "since your review" compares against.
         if (review.headSha) store.saveSnapshot(targetKey, review.headSha, store.readPatch(targetKey, 0, store.readPatch(targetKey, 0, 0).total).text);
         pruneDiffs(store, review);
+        // Your review answers whatever turn was holding.
+        store.setLifecycle(targetKey, { heldTurn: null });
         await notifications.dismiss(targetKey).catch(() => {});
         await sync.evaluate(targetKey);
       }
@@ -678,9 +680,10 @@ export default async function plugin(bb: BbPluginApi) {
   const settle = async ({ thread }: { thread: { id: string } }) => {
     const targetKey = await settleDiscussions(bb, store, thread.id);
     if (targetKey) bb.realtime.publish(`draft:${targetKey}`, {});
-    // A feedback check ends with the assistant's turn; an alert waiting for it can go now.
+    // A feedback check ends with the assistant's turn; an alert waiting for it can go now. A check still
+    // queued behind another message hasn't run yet.
     const checked = assistantReview(store, thread.id);
-    if (checked && store.getReview(checked)?.verifyingSince) {
+    if (checked && store.getReview(checked)?.verifyingSince && !(await bb.sdk.threads.queuedMessages.list({ threadId: thread.id }).catch(() => [])).length) {
       store.setLifecycle(checked, { verifyingSince: null, verifyingHead: null, preparedAt: Date.now() });
       await sync.evaluate(checked);
       bb.realtime.publish(`feedback:${checked}`, { ts: Date.now() });

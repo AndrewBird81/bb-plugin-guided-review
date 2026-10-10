@@ -21,6 +21,8 @@ test("submission pins the reviewed commit and clears only the submitted draft", 
   store.saveReviewerNotes("pr-test", "Private: ask about rollout", 0);
   expect(await submit("pr-test")).toEqual({ ok: true });
   expect(run).toHaveBeenLastCalledWith(expect.arrayContaining(["repos/acme/web/pulls/7/reviews"]), {
+    // No timeout: a submission killed mid-flight could land and then be submitted twice.
+    timeoutMs: 0,
     stdin: JSON.stringify({ event: "COMMENT", body: "My summary", comments: [{ path: "a.ts", line: 1, side: "RIGHT", body: "Please explain this" }], commit_id: "sha1" }),
   });
   expect(store.getDraft("pr-test")).toMatchObject({ verdict: "COMMENT", body: "", comments: [] });

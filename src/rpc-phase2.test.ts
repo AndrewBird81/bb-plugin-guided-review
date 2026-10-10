@@ -145,7 +145,8 @@ test("replyToThread returns ok:true and calls gh with the reply endpoint + body"
   const call = (gh.runGh as any).mock.calls.find((c: any[]) => c[0][3]?.includes("/comments/111/replies"));
   expect(call).toBeTruthy();
   expect(call[0]).toEqual(["api", "-X", "POST", "repos/acme/web/pulls/1/comments/111/replies", "--input", "-"]);
-  expect(call[1]).toEqual({ stdin: JSON.stringify({ body: "thanks" }) });
+  // A write waits as long as it takes: a reply killed mid-flight could land twice on retry.
+  expect(call[1]).toEqual({ stdin: JSON.stringify({ body: "thanks" }), timeoutMs: 0 });
 });
 
 test("checkForUpdates returns hasNewCommits:true when the mocked head differs from the stored headSha", async () => {

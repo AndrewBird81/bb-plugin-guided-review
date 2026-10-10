@@ -215,3 +215,34 @@ test("a failed or interrupted rebuild puts the previous guide and diff back", ()
   expect(s.getReview("pr-1")).toMatchObject({ headSha: "sha1", status: "error" });
   expect(s.restoreGuide("pr-1")).toBe(false);
 });
+
+test("restoring a guide moves unsent comments back to the restored diff, and never replaces a submitted guide", () => {
+  const s = store();
+  const p1 = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,2 @@\n context\n+the line\n";
+  const p2 = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1,1 +1,3 @@\n context\n+new first\n+the line\n";
+  s.saveReview({ targetKey: "pr-1", kind: "pr", number: 1, status: "ready", createdAt: 1, headSha: "sha1" });
+  s.savePatch("pr-1", p1);
+  s.saveGuide("pr-1", { title: "Old", intent: "I", sections: [], unplacedFiles: [] });
+  s.upsertDraftComment("pr-1", { file: "a.ts", line: 2, side: "RIGHT", body: "Why?" });
+  s.backupGuide("pr-1");
+  // The rebuild moved the comment onto the new diff, then failed.
+  s.savePatch("pr-1", p2);
+  s.rebaseDraftComment("pr-1", { file: "a.ts", line: 2, side: "RIGHT" }, 3);
+  s.beginGeneration("pr-1");
+  expect(s.restoreGuide("pr-1")).toBe(true);
+  expect(s.getDraft("pr-1").comments).toMatchObject([{ line: 2 }]);
+  expect(s.staleDraftComments("pr-1")).toHaveLength(0);
+  // A worker that already submitted its guide keeps it.
+  s.backupGuide("pr-1");
+  s.saveGuide("pr-1", { title: "New", intent: "I", sections: [], unplacedFiles: [] });
+  expect(s.restoreGuide("pr-1")).toBe(false);
+  expect(s.getGuide("pr-1")?.title).toBe("New");
+});
+
+test("a thread known to be open and resolved since dates from now, even after an account switch", () => {
+  const s = store();
+  s.saveFeedbackThreads("pr-1", [{ ...thread("t1", false), createdAt: 100 }], 1);
+  s.clearFeedbackFetches();
+  s.saveFeedbackThreads("pr-1", [{ ...thread("t1", true), createdAt: 100 }], 2);
+  expect(s.listFeedbackThreads("pr-1")[0].resolvedSeenAt).toBeGreaterThan(1_000_000);
+});

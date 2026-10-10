@@ -61,6 +61,8 @@ export interface TurnSignals {
   /** The latest comment on the PR, by someone else, that mentions you. */
   mentionAt?: number | null;
   mentionBy?: string | null;
+  /** When bb saw GitHub dismiss your latest review. */
+  dismissedAt?: number | null;
   /** Your changes-requested is what's left: everyone else who reviewed approved. */
   blocking?: boolean;
   /** Commits on the PR since your last review, when known. */
@@ -198,7 +200,7 @@ export function computeTurn(review: TurnInput, options: TurnOptions = defaultTur
     }
     // GitHub dismissed your review, for example a stale approval.
     if (!verdict) {
-      if (after(lastReviewAt, snoozedAt)) return needs("dismissed", "Review dismissed", `dismissed:${lastReviewAt}`, lastReviewAt!, false);
+      if (after(lastReviewAt, snoozedAt)) return needs("dismissed", "Review dismissed", `dismissed:${lastReviewAt}`, lastReviewAt!, false, s.dismissedAt ?? lastReviewAt!);
       return make("waiting", "snoozed", "Not yet", "View review", { at: snoozedAt });
     }
     // Someone asking you something is your turn whatever your verdict: a question on your thread, or any reply if you chose that, or a mention.

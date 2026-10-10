@@ -115,11 +115,17 @@ function normalize(pr: any, ref: PrRef, viewer: string, teams: ReadonlySet<strin
     .map((r: any) => ({ id: r.id, state: r.state as ReviewState, submittedAt: time(r.submittedAt), sha: r.commit?.oid ?? null, body: r.body ?? "" }))
     .sort((a: MyReview, b: MyReview) => a.submittedAt - b.submittedAt);
 
+  // A request withdrawn later, for the same reviewer (you, or that team), doesn't count.
+  const removed = (match: { via: "user" | "team"; team?: string }, after: number) => events.some((e) => {
+    if (e.__typename !== "ReviewRequestRemovedEvent" || !(time(e.createdAt) > after)) return false;
+    const target = via(e.requestedReviewer, viewer, teams);
+    return target?.via === match.via && target.team === match.team;
+  });
   const requests: ReviewRequestEvent[] = [];
   for (const e of events) {
     if (e.__typename !== "ReviewRequestedEvent") continue;
     const match = via(e.requestedReviewer, viewer, teams);
-    if (match) requests.push({ at: time(e.createdAt), by: e.actor?.login ?? null, ...match });
+    if (match && !removed(match, time(e.createdAt))) requests.push({ at: time(e.createdAt), by: e.actor?.login ?? null, ...match });
   }
   requests.sort((a, b) => a.at - b.at);
 
@@ -145,7 +151,6 @@ function normalize(pr: any, ref: PrRef, viewer: string, teams: ReadonlySet<strin
     updatedAt: time(pr.updatedAt),
     ci: CI[pr.head?.nodes?.[0]?.commit?.statusCheckRollup?.state] ?? "none",
     myReviews, otherOpinions, requests, requestPending,
-    requestRemovedAt: at("ReviewRequestRemovedEvent", (e) => !!via(e.requestedReviewer, viewer, teams)),
     mention,
     commits: (pr.commits?.nodes ?? []).map((n: any) => n?.commit?.oid).filter(Boolean),
   };

@@ -44,6 +44,7 @@ export function createReviewSubmitter(store: Store, run: typeof runGh) {
       if (store.getReview(targetKey)?.status === "generating" || store.getReview(targetKey)?.headSha !== m.headSha) return { ok: false, error: "The review changed during submission. Wait for generation and review the draft again." };
       if (revision) requireReviewRevision(store, targetKey, revision);
       const result = await authenticatedRun(ghSubmitReviewArgs(m.repo, m.number), {
+        timeoutMs: 0,
         stdin: JSON.stringify({ ...toGithubReviewPayload(draft), commit_id: m.headSha }),
       });
       if (result.code !== 0) return { ok: false, error: ghErrorMessage(result) };

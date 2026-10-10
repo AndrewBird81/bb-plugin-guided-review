@@ -7,6 +7,7 @@ import type { AssessmentSummary, TurnSignals } from "../lib/turn";
 import type { AssessmentItem, AssessmentRun, ReplyDraft } from "../lib/feedback";
 import type { FeedbackThread } from "./github/types";
 import { diffPositions } from "./review-positions";
+import { reanchor } from "./reanchor";
 
 export interface ReviewLifecycle {
   prState?: "OPEN" | "CLOSED" | "MERGED";
@@ -48,6 +49,12 @@ export interface ReviewLifecycle {
   submittedReviewId?: string | null;
   /** The head commit the assistant is checking. */
   verifyingHead?: string | null;
+  /** The head commit when bb first read the PR; pushes before it are history. */
+  watchedHead?: string | null;
+  /** The turn signal whose re-review was prepared, or needed none. */
+  preparedSignal?: string | null;
+  /** When preparing a re-review was last tried, to retry a failed start now and then. */
+  prepareTriedAt?: number | null;
 }
 
 export interface ReviewMeta extends ReviewLifecycle {
@@ -381,12 +388,23 @@ export function createStore(bb: BbPluginApi): Store {
     restoreGuide(k) {
       const row = db.prepare(`SELECT data FROM guide_backups WHERE target_key=?`).get(k) as { data: string } | undefined;
       if (!row) return false;
+      // A guide the worker already submitted stands; only an empty review gets the kept one back.
+      if (this.getGuide(k)) {
+        this.dropGuideBackup(k);
+        return false;
+      }
       const kept = JSON.parse(row.data);
+      const replaced = this.readPatch(k, 0, this.readPatch(k, 0, 0).total).text;
       db.transaction(() => {
         this.savePatch(k, kept.patch);
         this.saveGuide(k, kept.guide);
         db.prepare(`UPDATE reviews SET head_sha=?, base=?, head=?, git_ref=? WHERE target_key=?`).run(kept.headSha, kept.base, kept.head, kept.gitRef, k);
         db.prepare(`DELETE FROM guide_backups WHERE target_key=?`).run(k);
+        // Unsent comments moved to the replaced diff move back with it.
+        for (const comment of this.getDraft(k).comments) {
+          const placed = reanchor({ ...comment, code: this.draftCommentCode(k, comment) }, replaced, kept.patch);
+          if (placed.status !== "lost") this.rebaseDraftComment(k, comment, placed.status === "moved" ? placed.line : comment.line);
+        }
       })();
       return true;
     },
@@ -566,7 +584,8 @@ export function createStore(bb: BbPluginApi): Store {
         const insert = db.prepare(`INSERT INTO feedback_threads VALUES (?,?,?,?)`);
         // When a thread was resolved isn't in GitHub's data; the first time bb saw it resolved stands in.
         // On the first read it was resolved some time before, so its last activity stands in instead.
-        const seen = (thread: FeedbackThread) => previous.get(thread.id) ?? (first ? Math.max(thread.createdAt, ...thread.replies.map((r) => r.createdAt)) : now);
+        const seen = (thread: FeedbackThread) => previous.has(thread.id) ? previous.get(thread.id) ?? now
+          : first ? Math.max(thread.createdAt, ...thread.replies.map((r) => r.createdAt)) : now;
         for (const thread of threads) insert.run(k, thread.id, JSON.stringify(thread), thread.isResolved ? seen(thread) : null);
         db.prepare(`INSERT INTO feedback_fetches VALUES (?,?,?) ON CONFLICT(target_key) DO UPDATE SET fetched_at=excluded.fetched_at, pr_updated_at=excluded.pr_updated_at`)
           .run(k, now, prUpdatedAt);

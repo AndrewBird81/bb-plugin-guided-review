@@ -118,7 +118,7 @@ test("replying from the Feedback view posts to the thread and clears the drafted
   const result = await call("replyToFeedback", { targetKey: "pr-1", threadId: "t1", body: "Thanks, looks right." });
   expect(result.ok).toBe(true);
   const reply = runGh.mock.calls.find(([args]) => String(args[3]).includes("/comments/11/replies"));
-  expect(reply?.[1]).toEqual({ stdin: JSON.stringify({ body: "Thanks, looks right." }) });
+  expect(reply?.[1]).toEqual({ stdin: JSON.stringify({ body: "Thanks, looks right." }), timeoutMs: 0 });
   expect(store.listReplyDrafts("pr-1").size).toBe(0);
 });
 
@@ -162,4 +162,17 @@ test("submitting records the review's GitHub id, and the sync recognizes it", as
   expect(factsUpdate(meta, { ...base, myReviews: mine }, "me", 20_000, 20_000)).toMatchObject({ submittedVerdict: "REQUEST_CHANGES", submittedAt: 7_000, submittedReviewId: null });
   // Until GitHub reports it, the local receipt stands.
   expect(factsUpdate(meta, { ...base, myReviews: mine.slice(0, 1) }, "me", 20_000, 20_000)).not.toHaveProperty("submittedVerdict");
+});
+
+test("a check queued behind another message isn't over when the assistant's current turn ends", async () => {
+  const { bb, harness, store } = await setup();
+  const { makeThreadResponse } = await import("@get-bb/plugin-sdk/testing");
+  store.setLifecycle("pr-1", { verifyingSince: Date.now(), verifyingHead: "sha2" });
+  harness.inspection.sdk.stub("threads.queuedMessages.list", async () => [{ id: "q1" }]);
+  await harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "assistant" }), lastAssistantText: null });
+  expect(store.getReview("pr-1")?.verifyingSince).toEqual(expect.any(Number));
+  harness.inspection.sdk.stub("threads.queuedMessages.list", async () => []);
+  await harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "assistant" }), lastAssistantText: null });
+  expect(store.getReview("pr-1")).toMatchObject({ verifyingSince: null, verifyingHead: null, preparedAt: expect.any(Number) });
+  void bb;
 });
