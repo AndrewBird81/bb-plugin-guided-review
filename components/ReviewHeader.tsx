@@ -67,6 +67,7 @@ export const ReviewHeader = memo(function ReviewHeader({
   review,
   checks,
   intent,
+  sinceReview,
   trailing,
   onShowFeedback,
   onSnooze,
@@ -75,6 +76,8 @@ export const ReviewHeader = memo(function ReviewHeader({
   review: any;
   checks?: ChecksSummary;
   intent?: string;
+  /** The guide's summary of what changed since your last review. */
+  sinceReview?: string;
   /** Actions at the end of the title row, such as Re-review. */
   trailing?: ReactNode;
   /** The progress pill opens the Feedback view. */
@@ -146,6 +149,12 @@ export const ReviewHeader = memo(function ReviewHeader({
                 <Icon name={expanded ? "ChevronUp" : "ChevronDown"} className="size-3" aria-hidden />
               </button>
             )}
+          </div>
+        )}
+        {sinceReview && (
+          <div className="flex max-w-[80ch] gap-2 border-l-2 border-(--ansi-13)/50 pl-3 text-sm text-foreground/90">
+            <span className="shrink-0 font-medium text-(--ansi-13)">Since your review</span>
+            <Markdown content={sinceReview} className="min-w-0 text-sm leading-relaxed" />
           </div>
         )}
       </div>

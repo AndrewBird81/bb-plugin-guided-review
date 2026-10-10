@@ -461,7 +461,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
       ) : (
         <div className="border-b border-border">
           <div className="px-4 pb-3.5 pt-3">
-            <ReviewHeader review={review} checks={checks} intent={guide.intent} onShowFeedback={isPr ? () => setView("feedback") : undefined} onSnooze={isPr ? (snoozed) => void snooze(snoozed) : undefined} snoozing={snoozing} trailing={!review?.archivedAt && <RereviewBanner targetKey={targetKey} />} />
+            <ReviewHeader review={review} checks={checks} intent={guide.intent} sinceReview={guide.sinceReview} onShowFeedback={isPr ? () => setView("feedback") : undefined} onSnooze={isPr ? (snoozed) => void snooze(snoozed) : undefined} snoozing={snoozing} trailing={!review?.archivedAt && <RereviewBanner targetKey={targetKey} />} />
           </div>
           {generatingReplacement && <p role="status" className="flex items-center gap-2 border-t border-warning/20 bg-warning/10 px-4 py-2 text-xs text-warning-text"><Icon name="Loading" className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />Regenerating the guide. Your previous diff and unsaved edits remain visible.</p>}
         </div>

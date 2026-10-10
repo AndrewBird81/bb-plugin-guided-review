@@ -382,7 +382,7 @@ export const FeedbackPanel = memo(function FeedbackPanel({ targetKey, review, re
             <Icon name="Sparkles" className="size-4 text-(--ansi-13)" aria-hidden />
             {run.suggestedVerdict ? `Assistant suggests: ${SUGGESTED_LABEL[run.suggestedVerdict]}` : "Assistant’s check"}
           </p>
-          {(run.suggestedBody || run.summary) && <Markdown content={run.suggestedBody || run.summary} className="text-sm leading-relaxed" />}
+          {(run.suggestedBody || run.summary) && <Markdown content={withLineBreaks(run.suggestedBody || run.summary)} className="text-sm leading-relaxed" />}
           {(run.suggestedVerdict || left) && (
             <div className="flex flex-wrap gap-2">
               {run.suggestedVerdict && <Button size="sm" disabled={!!busy} onClick={() => void applySuggestion("suggested")}>Use as draft</Button>}

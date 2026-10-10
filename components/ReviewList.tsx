@@ -17,30 +17,7 @@ import { Badge, TONE_TEXT } from "./ui/badge";
 import type { Turn, TurnGroup } from "../lib/turn";
 import { IconTile } from "./ui/icon-tile";
 import { InlineCode } from "./ui/inline-code";
-
-/** Compact elapsed time, such as "2h", or "now". Returns null for absent/implausible stamps. */
-function age(ts?: number | null): string | null {
-  if (typeof ts !== "number" || !Number.isFinite(ts) || ts < 1_000_000_000_000) return null;
-  const s = Math.max(0, Math.floor((Date.now() - ts) / 1000));
-  if (s < 45) return "now";
-  const m = Math.floor(s / 60);
-  if (m < 60) return `${m}m`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  const d = Math.floor(h / 24);
-  if (d < 7) return `${d}d`;
-  const w = Math.floor(d / 7);
-  if (w < 5) return `${w}w`;
-  const mo = Math.floor(d / 30);
-  if (mo < 12) return `${mo}mo`;
-  return `${Math.floor(d / 365)}y`;
-}
-
-/** Compact "2h ago" relative time. Returns null for absent/implausible stamps. */
-function timeAgo(ts?: number): string | null {
-  const elapsed = age(ts);
-  return elapsed === "now" ? "just now" : elapsed && `${elapsed} ago`;
-}
+import { age, timeAgo } from "./time-ago";
 
 /** Why it's your turn, with who asked when GitHub says. Null when the status badge says it all. */
 function turnWhy(review: ReviewItem, turn: Turn): string | null {
