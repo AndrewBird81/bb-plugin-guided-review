@@ -105,7 +105,7 @@ Guided Review alerts only about what happens after it starts following a PR: aft
 
 **Since your review** in the diff toolbar shows only what changed since the commit you last reviewed, with new lines marked. It compares the PR's diff then with its diff now, so rebases and merges from the base branch don't show up as changes. Viewed marks survive a rebase, and chapters show how many of their files changed.
 
-With **Track reviews from GitHub** on (the default), PRs you're asked to review, and open PRs you've reviewed in the last 60 days, join the list without a guide; start one from the review or its menu. List patterns under **Start guides automatically** (`acme/*`, `acme/api`, or `*`) to have the guide ready by the time a request alerts you. A PR you delete isn't added back. Reading GitHub costs about 4 GraphQL points per 10 PRs a pass, out of the 5,000 an hour your account has.
+With **Track reviews from GitHub** on (the default), PRs where your review is requested, and open PRs you've reviewed in the last 60 days, join the list without a guide; start one from the review or its menu. Requests to a team you're on join only with **Include team requests**: teams can be asked for many reviews. List patterns under **Start guides automatically** (`acme/*`, `acme/api`, or `*`) to have the guide ready by the time a request alerts you. A PR you delete isn't added back. Reading GitHub costs about 4 GraphQL points per 10 PRs a pass, out of the 5,000 an hour your account has.
 
 ## Customize your reviews
 

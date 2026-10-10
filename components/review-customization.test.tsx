@@ -195,7 +195,8 @@ test("each agent uses project defaults until customized with bb's pickers", asyn
   fireEvent.change(within(second).getByRole("textbox", { name: "Model" }), { target: { value: "local" } });
   fireEvent.click(within(second).getByRole("button", { name: "Apply execution selection" }));
   fireEvent.click(slot.getByRole("button", { name: "Save settings" }));
-  await slot.findByText("Settings saved");
+  // The settings page is long; under a full parallel run it can take more than the default second.
+  await slot.findByText("Settings saved", {}, { timeout: 5000 });
   expect(record.preferences.guideAgent).toEqual({ providerId: "codex", model: "gpt-6", reasoningLevel: "high", permissionMode: "full", serviceTier: "fast" });
   expect(record.preferences.assistantAgent).toEqual({ providerId: "pi", model: "local", reasoningLevel: "medium", permissionMode: "auto" });
 

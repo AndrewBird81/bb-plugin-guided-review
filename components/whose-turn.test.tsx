@@ -168,7 +168,12 @@ test("whose-turn settings save into preferences, with one repository pattern per
   expect(within(replies).getByRole("button", { name: "Questions for you" }).getAttribute("aria-pressed")).toBe("true");
   fireEvent.click(within(replies).getByRole("button", { name: "Any reply" }));
   fireEvent.click(within(slot.getByRole("group", { name: "After the author pushes" })).getByRole("button", { name: /bring it back when everything/ }));
+  // Team requests are opt-in, and only while tracking is on.
+  const teams = slot.getByRole("checkbox", { name: /Include team requests/ }) as HTMLInputElement;
+  expect(teams.checked).toBe(false);
+  fireEvent.click(teams);
   fireEvent.click(slot.getByRole("checkbox", { name: /Track reviews from GitHub/ }));
+  expect(teams.disabled).toBe(true);
   const repos = slot.getByRole("textbox", { name: "Start guides automatically" }) as HTMLTextAreaElement;
   fireEvent.change(repos, { target: { value: "  Acme/App \n\n acme/*\n" } });
   // The typed text, blank lines included, stays while editing.
@@ -178,7 +183,7 @@ test("whose-turn settings save into preferences, with one repository pattern per
   fireEvent.change(prompt, { target: { value: "" } });
   fireEvent.click(slot.getByRole("button", { name: "Save settings" }));
   await slot.findByText("Settings saved");
-  expect(save.mock.calls[0][0].preferences).toMatchObject({ wakeOnReplies: "any", pushChecks: "ready", trackGithubReviews: false, autoStartRepos: ["acme/app", "acme/*"], verificationPrompt: "" });
+  expect(save.mock.calls[0][0].preferences).toMatchObject({ wakeOnReplies: "any", pushChecks: "ready", trackGithubReviews: false, trackTeamRequests: true, autoStartRepos: ["acme/app", "acme/*"], verificationPrompt: "" });
   expect(repos.value).toBe("  Acme/App \n\n acme/*\n");
 
   // Restore defaults clears the patterns.

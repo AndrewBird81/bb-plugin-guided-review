@@ -27,6 +27,7 @@ export const preferencesSchema = z.object({
   wakeOnReplies: z.enum(["questions", "any"]),
   pushChecks: z.enum(["off", "progress", "ready"]),
   trackGithubReviews: z.boolean(),
+  trackTeamRequests: z.boolean(),
   autoStartRepos: z.array(z.string().trim().toLowerCase().regex(REPO_PATTERN, "Use owner/repo, owner/*, or *.")).max(50),
   verificationPrompt: z.string().max(12000),
 }).strict();

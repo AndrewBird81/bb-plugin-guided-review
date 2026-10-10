@@ -20,7 +20,7 @@ export interface GithubReads {
   gate: NotificationGate;
   facts(refs: PrRef[], viewer: string, teams: ReadonlySet<string>): Promise<Map<string, PrFacts | null>>;
   threads(repo: string, number: number, viewer: string): Promise<FeedbackThread[]>;
-  discover(options: { reviewed: boolean }): Promise<DiscoveredPr[]>;
+  discover(options: { reviewed: boolean; teams: boolean }): Promise<DiscoveredPr[]>;
 }
 
 export function githubReads(run: typeof runGh): GithubReads {
@@ -291,7 +291,7 @@ export function createReviewSync(bb: BbPluginApi, store: Store, run: typeof runG
     }
     const login = await github.viewer.login();
     if (!login) return;
-    const found = await github.discover({ reviewed: true });
+    const found = await github.discover({ reviewed: true, teams: store.getPreferences().preferences.trackTeamRequests });
     const projectId = await actions.projectId();
     if (!projectId || disposed) return;
     const first = (await bb.storage.kv.get<{ login: string }>(DISCOVERED))?.login !== login;
