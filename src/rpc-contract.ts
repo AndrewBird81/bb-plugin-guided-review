@@ -179,4 +179,53 @@ export const rpcContract = defineRpcContract({
     input: z.object({ targetKey: z.string() }).strict(),
     output: z.object({ accessible: z.boolean(), repo: z.string().nullable(), account: z.string().nullable() }),
   },
+
+  // Whose turn. Reviews carry `turn` (lib/turn.ts Turn) and `progress` from the server.
+  /** "Not yet": back to Waiting on author until a newer signal. snoozed: false undoes it. */
+  snoozeReview: {
+    input: z.object({ targetKey: z.string(), snoozed: z.boolean() }).strict(),
+    output: z.object({ ok: z.boolean(), error: z.string().optional() }),
+  },
+  /** The reviewer opened the review: clear its Needs You alert. */
+  markSeen: { input: targetKey, output: z.object({ ok: z.boolean() }) },
+  /** Generate the guide for a review found on GitHub (status "tracked"). */
+  startTrackedReview: { input: targetKey, output: z.object({ ok: z.boolean(), error: z.string().optional() }) },
+
+  // Your feedback and the assistant's check of it (lib/feedback.ts FeedbackView).
+  getFeedback: { input: targetKey, output: z.object({ feedback: z.any() }) },
+  /** Re-read your threads from GitHub first. */
+  refreshFeedback: { input: targetKey, output: z.object({ feedback: z.any() }) },
+  /** Ask the assistant to check your feedback against the PR now. */
+  checkFeedback: { input: targetKey, output: z.object({ ok: z.boolean(), error: z.string().optional() }) },
+  /** Post a reply to one of your threads on GitHub and clear its drafted reply. */
+  replyToFeedback: {
+    input: z.object({ targetKey: z.string(), threadId: z.string(), body: z.string().trim().min(1).max(65_000) }).strict(),
+    output: z.object({ ok: z.boolean(), error: z.string().optional(), feedback: z.any().optional() }),
+  },
+  saveReplyDraft: {
+    input: z.object({ targetKey: z.string(), threadId: z.string(), body: z.string().max(65_000) }).strict(),
+    output: z.object({ ok: z.boolean() }),
+  },
+  discardReplyDraft: { input: z.object({ targetKey: z.string(), threadId: z.string() }).strict(), output: z.object({ ok: z.boolean() }) },
+  /**
+   * Put the assistant's suggested verdict and summary in the draft ("suggested"), or a
+   * Request changes listing the feedback that isn't addressed yet ("remaining").
+   */
+  useSuggestedVerdict: {
+    input: z.object({ targetKey: z.string(), revision: z.string().optional(), mode: z.enum(["suggested", "remaining"]) }).strict(),
+    output: z.object({ ok: z.boolean(), error: z.string().optional(), draft: z.any().optional() }),
+  },
+
+  /**
+   * The displayed diff compared with the diff at your last review (src/interdiff.ts FileInterdiff[]).
+   * baseline null: you haven't reviewed it, or it's the same commit.
+   */
+  getSinceReview: {
+    input: targetKey,
+    output: z.object({
+      baseline: z.object({ sha: z.string(), at: z.number().nullable(), verdict: z.string().nullable() }).nullable(),
+      files: z.array(z.any()),
+      error: z.string().optional(),
+    }),
+  },
 });

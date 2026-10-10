@@ -45,6 +45,16 @@ import { createPluginUpdates } from "./src/plugin-updates";
 
 export { rpcContract } from "./src/rpc-contract";
 
+// Placeholder until the whose-turn handlers land.
+function pendingHandlers() {
+  const pending = () => { throw new Error("Not available yet."); };
+  return {
+    snoozeReview: pending, markSeen: pending, startTrackedReview: pending, getFeedback: pending, refreshFeedback: pending,
+    checkFeedback: pending, replyToFeedback: pending, saveReplyDraft: pending, discardReplyDraft: pending,
+    useSuggestedVerdict: pending, getSinceReview: pending,
+  };
+}
+
 // Raise when the review assistant's tools change.
 const ASSISTANT_TOOLS = 2;
 
@@ -332,6 +342,7 @@ export default async function plugin(bb: BbPluginApi) {
       const repo = store.getReview(targetKey)?.repo ?? null;
       return checkRepoAccess(runGh, repo);
     },
+    ...pendingHandlers(),
   };
   const guarded = Object.fromEntries(Object.entries(handlers).map(([name, handler]) =>
     [name, (input: unknown) => updates.run(() => (handler as (input: unknown) => unknown)(input))])) as unknown as typeof handlers;
