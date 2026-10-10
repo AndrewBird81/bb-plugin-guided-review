@@ -98,6 +98,8 @@ export interface TurnInput {
   signals?: TurnSignals | null;
   snoozedAt?: number | null;
   assessment?: AssessmentSummary | null;
+  /** A turn that came from a passing state (feedback handled, looks ready); it holds until you act. */
+  heldTurn?: { reason: TurnReason; label: string; signal: string; at: number } | null;
 }
 
 export interface TurnOptions {
@@ -126,6 +128,10 @@ export interface Turn {
   blocking: boolean;
   /** The head moved since your last review. */
   updated: boolean;
+  /** When the event behind this turn happened, such as the re-request. Null when there isn't one. */
+  eventAt: number | null;
+  /** The guide couldn't be (re)generated; the turn underneath still stands. */
+  failed: boolean;
 }
 
 export const QUIET_MS = 10 * 60_000;
@@ -145,7 +151,7 @@ export function computeTurn(review: TurnInput, options: TurnOptions = defaultTur
   const local = (review.submittedAt ?? 0) > (s.lastReviewAt ?? 0);
   const reviewedSha = (local ? review.submittedHeadSha : s.lastReviewSha ?? review.submittedHeadSha) ?? null;
   const updated = !!(head && reviewedSha && head !== reviewedSha);
-  const base = { signal: null, at: null, notify: false, blocking: false, updated };
+  const base = { signal: null, at: null, notify: false, blocking: false, updated, eventAt: null, failed: false };
   const make = (group: TurnGroup, reason: TurnReason, label: string, action: string, extra: Partial<Turn> = {}): Turn =>
     ({ ...base, group, reason, label, action, ...extra });
 
@@ -162,9 +168,9 @@ export function computeTurn(review: TurnInput, options: TurnOptions = defaultTur
   if (review.userArchivedAt && !(reRequested && after(s.requestedAt, review.userArchivedAt))) {
     return make("archive", "archived", "Archived", "View review");
   }
-  if (review.status === "error") return make("needs", "failed", "Failed", "Retry review");
-
   const turn = reviewerTurn();
+  // A failed guide needs you to retry, without losing why it's your turn.
+  if (review.status === "error") return { ...turn, group: "needs", label: "Failed", action: "Retry review", failed: true };
   // Generation shows where the review stands; it doesn't move it.
   return review.status === "generating" ? { ...turn, label: "Generating", action: "View progress" } : turn;
 
@@ -176,7 +182,7 @@ export function computeTurn(review: TurnInput, options: TurnOptions = defaultTur
       if (s.requestPending || s.requestedAt) {
         const team = s.requestedVia === "team";
         return make("needs", team ? "team-requested" : "requested", team ? "Team review requested" : "Review requested", tracked ? "Start review" : "Open review", {
-          signal: `requested:${s.requestedAt ?? "pending"}`, at: s.requestedAt ?? review.createdAt ?? null, notify: !team,
+          signal: `requested:${s.requestedAt ?? "pending"}`, at: s.requestedAt ?? review.createdAt ?? null, notify: !team, eventAt: s.requestedAt ?? null,
         });
       }
       return make("needs", "new", tracked ? "Tracked" : "Ready", tracked ? "Start review" : "Open review", { at: review.createdAt ?? null });
@@ -184,8 +190,8 @@ export function computeTurn(review: TurnInput, options: TurnOptions = defaultTur
 
     const verdict = review.submittedVerdict ?? null;
     const blocking = verdict === "REQUEST_CHANGES" && !!s.blocking;
-    const needs = (reason: TurnReason, label: string, signal: string, at: number, notify: boolean) =>
-      make("needs", reason, label, "Review changes", { signal, at, notify, blocking });
+    const needs = (reason: TurnReason, label: string, signal: string, at: number, notify: boolean, eventAt = at) =>
+      make("needs", reason, label, "Review changes", { signal, at, notify, blocking, eventAt });
 
     if (reRequested && after(s.requestedAt, snoozedAt)) {
       return needs("re-requested", "Re-requested", `re-requested:${s.requestedAt}`, s.requestedAt, true);
@@ -195,14 +201,9 @@ export function computeTurn(review: TurnInput, options: TurnOptions = defaultTur
       if (after(lastReviewAt, snoozedAt)) return needs("dismissed", "Review dismissed", `dismissed:${lastReviewAt}`, lastReviewAt!, false);
       return make("waiting", "snoozed", "Not yet", "View review", { at: snoozedAt });
     }
-    if (s.isDraft) return make(verdict === "APPROVE" ? "reviewed" : "waiting", "draft", "Draft", "View review", { updated });
-    if (verdict === "APPROVE") return make("reviewed", "approved", updated ? "Approved · updated" : "Approved", "View review");
-
+    // Someone asking you something is your turn whatever your verdict: a question on your thread, or any reply if you chose that, or a mention.
     const threads = s.threads;
     const hasThreads = !!threads && threads.total > 0;
-    if (verdict === "COMMENT" && !hasThreads) return make("reviewed", "commented", "Commented", "View review");
-
-    // The author answered: a question for you, or any reply if you asked for that.
     const replyAt = options.wakeOnReplies === "any" ? Math.max(s.replyAt ?? 0, s.questionAt ?? 0) || null : s.questionAt;
     if (after(replyAt, lastReviewAt, snoozedAt)) {
       const question = replyAt === s.questionAt;
@@ -211,10 +212,17 @@ export function computeTurn(review: TurnInput, options: TurnOptions = defaultTur
     if (after(s.mentionAt, lastReviewAt, snoozedAt)) {
       return needs("mentioned", "Mentioned you", `mention:${s.mentionAt}`, s.mentionAt, true);
     }
+    if (s.isDraft) return make(verdict === "APPROVE" ? "reviewed" : "waiting", "draft", "Draft", "View review", { updated });
+    if (verdict === "APPROVE") return make("reviewed", "approved", updated ? "Approved · updated" : "Approved", "View review");
+    if (verdict === "COMMENT" && !hasThreads) return make("reviewed", "commented", "Commented", "View review");
+
+    // A handled or looks-ready turn holds until you act, even if the author pushes again.
+    const held = review.heldTurn;
+    if (held && after(held.at, lastReviewAt, snoozedAt)) return needs(held.reason, held.label, held.signal, held.at, false);
     // Every thread resolved or answered, new commits, CI settled, and the author quiet for a while.
     const quietAt = Math.max(s.headSeenAt ?? 0, s.handledAt ?? 0) + (options.quietMs ?? QUIET_MS);
     if (hasThreads && updated && s.ci !== "fail" && s.ci !== "pending" && now >= quietAt && after(s.handledAt, lastReviewAt, snoozedAt)) {
-      return needs("handled", "Feedback handled", `handled:${head}`, quietAt, true);
+      return needs("handled", "Feedback handled", `handled:${s.handledAt}`, quietAt, true, s.handledAt);
     }
     const assessment = review.assessment;
     if (options.pushChecks === "ready" && assessment && assessment.headSha === head && updated && assessment.total > 0
@@ -234,4 +242,20 @@ export function feedbackProgress(review: TurnInput): { done: number; total: numb
   const t = review.signals?.threads;
   if (t && t.total > 0) return { done: t.resolved + t.answered, total: t.total, source: "threads" };
   return null;
+}
+
+/** The commit and time your feedback came from: your latest real review, or a newer one submitted here. */
+export function baselineOf(review: TurnInput): { sha: string | null; at: number | null; verdict: Verdict | null } {
+  const s = review.signals ?? {};
+  const local = (review.submittedAt ?? 0) > (s.lastReviewAt ?? 0);
+  return {
+    sha: (local ? review.submittedHeadSha : s.lastReviewSha ?? review.submittedHeadSha) ?? null,
+    at: (local ? review.submittedAt : s.lastReviewAt ?? review.submittedAt) ?? null,
+    verdict: review.submittedVerdict ?? null,
+  };
+}
+
+/** Whether "Not yet" applies: it's your turn on a review you've already given, and the guide didn't fail. */
+export function canSnooze(review: TurnInput, turn: Turn): boolean {
+  return turn.group === "needs" && !turn.failed && baselineOf(review).at !== null;
 }

@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { computeTurn, feedbackProgress, QUIET_MS, type TurnInput, type TurnOptions } from "../lib/turn";
+import { baselineOf, canSnooze, computeTurn, feedbackProgress, QUIET_MS, type TurnInput, type TurnOptions } from "../lib/turn";
 
 const NOW = Date.parse("2026-10-10T12:00:00Z");
 const hour = 3_600_000;
@@ -81,7 +81,7 @@ test("a mention after your review wakes it", () => {
 
 test("feedback handled: every thread resolved or answered, new commits, CI settled, author quiet", () => {
   const handled = { threads: { total: 3, resolved: 2, answered: 1, questions: 0, open: 0, outdated: 1 }, handledAt: t(1), headSeenAt: t(2) };
-  expect(turn(changesRequested({ latestHeadSha: "sha2" }, handled))).toMatchObject({ group: "needs", reason: "handled", notify: true, signal: "handled:sha2" });
+  expect(turn(changesRequested({ latestHeadSha: "sha2" }, handled))).toMatchObject({ group: "needs", reason: "handled", notify: true, signal: `handled:${t(1)}`, eventAt: t(1) });
   // Without new commits, CI still running or failing, or within the quiet period, it waits.
   expect(turn(changesRequested({}, handled)).group).toBe("waiting");
   expect(turn(changesRequested({ latestHeadSha: "sha2" }, { ...handled, ci: "pending" })).group).toBe("waiting");
@@ -120,7 +120,9 @@ test("a draft PR waits on the author", () => {
 test("generation relabels a review without moving it", () => {
   expect(turn(changesRequested({ status: "generating" }))).toMatchObject({ group: "waiting", label: "Generating" });
   expect(turn({ targetKey: "a", status: "generating" })).toMatchObject({ group: "needs", label: "Generating" });
-  expect(turn(changesRequested({ status: "error" }))).toMatchObject({ group: "needs", reason: "failed" });
+  // A failed guide keeps why it's your turn, so its alert isn't lost.
+  expect(turn(changesRequested({ status: "error" }, { requestedAt: t(1) }))).toMatchObject({ group: "needs", reason: "re-requested", label: "Failed", failed: true, signal: `re-requested:${t(1)}` });
+  expect(turn(changesRequested({ status: "error" }))).toMatchObject({ group: "needs", reason: "waiting", label: "Failed", failed: true });
 });
 
 test("a local receipt counts until GitHub reports the review", () => {
@@ -140,4 +142,30 @@ test("progress prefers the assistant's check of the current head, then your thre
   const checked = { ...review, assessment: { headSha: "sha2", total: 5, addressed: 3, partial: 1, notAddressed: 1, disputed: 0, unclear: 0, assessedAt: t(1) } };
   expect(feedbackProgress(checked)).toEqual({ done: 3, total: 5, source: "assistant" });
   expect(feedbackProgress({ targetKey: "a" })).toBeNull();
+});
+
+test("a handled turn holds until you act, even when the author pushes again", () => {
+  const held = { reason: "handled" as const, label: "Feedback handled", signal: `handled:${t(1)}`, at: t(0.5) };
+  // A new push restarted the quiet period, but the turn already came to you.
+  const review = changesRequested({ latestHeadSha: "sha3", heldTurn: held }, { headSeenAt: NOW - 60_000, handledAt: t(1) });
+  expect(turn(review)).toMatchObject({ group: "needs", reason: "handled", signal: `handled:${t(1)}`, notify: false });
+  // Your next review, or Not yet, ends it.
+  expect(turn({ ...review, submittedAt: NOW - 1000 }).group).toBe("waiting");
+  expect(turn({ ...review, snoozedAt: NOW - 1000 }).group).toBe("waiting");
+});
+
+test("questions and mentions count whatever your verdict", () => {
+  expect(turn(changesRequested({ submittedVerdict: "APPROVE" }, { questionAt: t(1) }))).toMatchObject({ group: "needs", reason: "question" });
+  expect(turn(changesRequested({ submittedVerdict: "APPROVE" }, { mentionAt: t(1) }))).toMatchObject({ group: "needs", reason: "mentioned" });
+  expect(turn(changesRequested({}, { questionAt: t(1), isDraft: true }))).toMatchObject({ group: "needs", reason: "question" });
+});
+
+test("the baseline is your latest review, here or on GitHub, and Not yet needs one", () => {
+  expect(baselineOf(changesRequested())).toEqual({ sha: "sha1", at: t(5), verdict: "REQUEST_CHANGES" });
+  expect(baselineOf(changesRequested({ submittedAt: t(1), submittedHeadSha: "sha2" }))).toEqual({ sha: "sha2", at: t(1), verdict: "REQUEST_CHANGES" });
+  const needs = changesRequested({}, { requestedAt: t(1) });
+  expect(canSnooze(needs, turn(needs))).toBe(true);
+  expect(canSnooze({ targetKey: "a", status: "ready" }, turn({ targetKey: "a", status: "ready" }))).toBe(false);
+  const failed = changesRequested({ status: "error" }, { requestedAt: t(1) });
+  expect(canSnooze(failed, turn(failed))).toBe(false);
 });

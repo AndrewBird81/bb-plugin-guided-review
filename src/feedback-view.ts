@@ -6,22 +6,12 @@ import { ghPrDiffArgs, ghErrorMessage } from "./gh";
 import { ensureGitHeaders } from "./patch";
 import { interdiff, type FileInterdiff } from "./interdiff";
 import { firstLine, type AssessmentItem, type FeedbackItem, type FeedbackView } from "../lib/feedback";
-import type { AssessmentSummary } from "../lib/turn";
+import { baselineOf, type AssessmentSummary } from "../lib/turn";
 import type { Verdict } from "./draft";
 
 type Run = typeof runGh;
 
-/** The commit your feedback came from: your latest real review. */
-export function baselineOf(review: ReviewMeta): { sha: string | null; at: number | null; verdict: Verdict | null } {
-  const s = review.signals ?? {};
-  const local = (review.submittedAt ?? 0) > (s.lastReviewAt ?? 0);
-  return {
-    sha: (local ? review.submittedHeadSha : s.lastReviewSha ?? review.submittedHeadSha) ?? null,
-    at: (local ? review.submittedAt : s.lastReviewAt ?? review.submittedAt) ?? null,
-    verdict: review.submittedVerdict ?? null,
-  };
-}
-
+export { baselineOf } from "../lib/turn";
 export const headOf = (review: ReviewMeta) => review.latestHeadSha ?? review.headSha ?? null;
 
 /**

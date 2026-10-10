@@ -9,7 +9,7 @@ afterEach(cleanup);
 const DAY = 86_400_000;
 const now = Date.now();
 const turn = (group: Turn["group"], reason: Turn["reason"], label: string, extra: Partial<Turn> = {}): Turn =>
-  ({ group, reason, label, action: "Open review", signal: null, at: null, notify: false, blocking: false, updated: false, ...extra });
+  ({ group, reason, label, action: "Open review", signal: null, at: null, notify: false, blocking: false, updated: false, eventAt: null, failed: false, ...extra });
 
 async function list(reviews: any[], overrides: Record<string, (input: any) => unknown> = {}) {
   const app = await loadPluginApp(() => import("../app"));
