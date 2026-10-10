@@ -1,6 +1,6 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { Guide } from "./guide";
-import { sameLocation, type CommentLocation, type Draft, type DraftComment, type Verdict } from "./draft";
+import { sameLocation, type CommentLocation, type Discussion, type DiscussionEntry, type Draft, type DraftComment, type Verdict } from "./draft";
 import { createHash, randomUUID } from "node:crypto";
 import { defaultPreferences, preferencesSchema, type PreferencesRecord, type ReviewPreferences, type ReviewerNotesRecord } from "./preferences";
 
@@ -90,6 +90,16 @@ export interface Store {
   setVerdict(targetKey: string, verdict: Verdict, body: string): Draft;
   staleDraftComments(targetKey: string): DraftComment[];
   clearSubmittedDraft(draft: Draft): void;
+  // Discussions with the review assistant at lines of the diff.
+  listDiscussions(targetKey: string): Discussion[];
+  /** A reviewer's message waits for the assistant; the assistant's answers it. */
+  addDiscussionMessage(targetKey: string, at: CommentLocation, author: DiscussionEntry["author"], body: string, startLine?: number): void;
+  /** Record an agent's change to the draft comment at a line that has a discussion, which answers it. */
+  noteDiscussionChange(targetKey: string, at: CommentLocation, kind: "added" | "edited" | "removed"): void;
+  deleteDiscussion(targetKey: string, at: CommentLocation): void;
+  clearDiscussions(targetKey: string): void;
+  /** Stop waiting for answers, for example once the assistant finishes. False when none were waiting. */
+  stopWaiting(targetKey: string): boolean;
   // Per-file "Viewed" state (Feature 1).
   getFileViews(targetKey: string): FileView[];
   setFileViewed(targetKey: string, file: string, hash: string): void;
@@ -138,7 +148,19 @@ export function createStore(bb: BbPluginApi): Store {
     `CREATE TABLE IF NOT EXISTS reviewer_notes (target_key TEXT PRIMARY KEY, body TEXT NOT NULL, revision INTEGER NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS assistant_threads (target_key TEXT PRIMARY KEY, thread_id TEXT NOT NULL, created_at INTEGER NOT NULL)`,
     `CREATE TABLE IF NOT EXISTS review_context (target_key TEXT PRIMARY KEY, text TEXT NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS discussion_entries (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, target_key TEXT NOT NULL,
+      file TEXT NOT NULL, line INTEGER NOT NULL, side TEXT NOT NULL,
+      author TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, start_line INTEGER, created_at INTEGER NOT NULL)`,
+    `CREATE TABLE IF NOT EXISTS discussion_waits (
+      target_key TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL, side TEXT NOT NULL,
+      PRIMARY KEY (target_key, file, line, side))`,
   ]);
+  const at = (k: string, { file, line, side }: CommentLocation) => [k, file, line, side] as const;
+  const hasDiscussion = (k: string, location: CommentLocation) =>
+    !!db.prepare(`SELECT 1 FROM discussion_entries WHERE target_key=? AND file=? AND line=? AND side=? LIMIT 1`).get(...at(k, location));
+  const stopWaitingAt = (k: string, location: CommentLocation) =>
+    db.prepare(`DELETE FROM discussion_waits WHERE target_key=? AND file=? AND line=? AND side=?`).run(...at(k, location));
 
   const rowToMeta = (r: any): ReviewMeta => ({
     targetKey: r.target_key, kind: r.kind, number: r.number ?? undefined, repo: r.repo ?? undefined,
@@ -312,6 +334,49 @@ export function createStore(bb: BbPluginApi): Store {
       }
       writeDraft(db, current);
     },
+    listDiscussions(k) {
+      const waiting = db.prepare(`SELECT file,line,side FROM discussion_waits WHERE target_key=?`).all(k) as CommentLocation[];
+      const discussions: Discussion[] = [];
+      for (const row of db.prepare(`SELECT * FROM discussion_entries WHERE target_key=? ORDER BY id`).all(k) as any[]) {
+        const location: CommentLocation = { file: row.file, line: row.line, side: row.side };
+        let discussion = discussions.find((d) => sameLocation(d, location));
+        if (!discussion) discussions.push(discussion = { ...location, entries: [], waiting: waiting.some((w) => sameLocation(w, location)) });
+        discussion.entries.push({ author: row.author, kind: row.kind, body: row.body, createdAt: row.created_at });
+        if (row.start_line != null && discussion.startLine === undefined) discussion.startLine = row.start_line;
+      }
+      return discussions;
+    },
+    addDiscussionMessage(k, location, author, body, startLine) {
+      db.transaction(() => {
+        db.prepare(`INSERT INTO discussion_entries (target_key,file,line,side,author,kind,body,start_line,created_at) VALUES (?,?,?,?,?,'message',?,?,?)`)
+          .run(...at(k, location), author, body, startLine ?? null, Date.now());
+        if (author === "reviewer") db.prepare(`INSERT OR IGNORE INTO discussion_waits VALUES (?,?,?,?)`).run(...at(k, location));
+        else stopWaitingAt(k, location);
+      })();
+    },
+    noteDiscussionChange(k, location, kind) {
+      if (!hasDiscussion(k, location)) return;
+      db.transaction(() => {
+        db.prepare(`INSERT INTO discussion_entries (target_key,file,line,side,author,kind,body,created_at) VALUES (?,?,?,?,'agent',?,'',?)`)
+          .run(...at(k, location), kind, Date.now());
+        stopWaitingAt(k, location);
+      })();
+    },
+    deleteDiscussion(k, location) {
+      db.transaction(() => {
+        db.prepare(`DELETE FROM discussion_entries WHERE target_key=? AND file=? AND line=? AND side=?`).run(...at(k, location));
+        stopWaitingAt(k, location);
+      })();
+    },
+    clearDiscussions(k) {
+      db.transaction(() => {
+        db.prepare(`DELETE FROM discussion_entries WHERE target_key=?`).run(k);
+        db.prepare(`DELETE FROM discussion_waits WHERE target_key=?`).run(k);
+      })();
+    },
+    stopWaiting(k) {
+      return db.prepare(`DELETE FROM discussion_waits WHERE target_key=?`).run(k).changes > 0;
+    },
     getFileViews(k) {
       return db
         .prepare(`SELECT file, hash, viewed_at FROM file_views WHERE target_key=?`)
@@ -373,6 +438,7 @@ export function createStore(bb: BbPluginApi): Store {
 const REVIEW_TABLES = [
   "reviews", "patches", "guides", "drafts", "file_views", "agent_threads", "agent_messages",
   "generations", "draft_comment_revisions", "review_lifecycle", "reviewer_notes", "assistant_threads", "review_context",
+  "discussion_entries", "discussion_waits",
 ] as const;
 
 function patchHash(patch: string) { return createHash("sha256").update(patch).digest("hex"); }

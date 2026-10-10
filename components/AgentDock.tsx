@@ -1,6 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { ThreadChat, useComposers, useRpc, experimental_ProviderModelPicker as ProviderModelPicker } from "@get-bb/plugin-sdk/app";
+import { ThreadChat, useComposers, useRealtime, useRpc, experimental_ProviderModelPicker as ProviderModelPicker } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
 import type { AgentMessage, AgentMessageContext } from "../src/store";
@@ -90,6 +90,8 @@ export const AgentDock = memo(function AgentDock({ targetKey, patch, injection, 
     } catch { if (mounted.current && revision === readRevision.current) setLoadError(true); }
   }, [rpc, targetKey]);
   useEffect(() => { if (visible) void load(); }, [visible, load]);
+  // Asking the agent from the diff can start the conversation.
+  useRealtime(`conversation:${targetKey}`, load);
   useEffect(() => {
     if (!visible || threadId) return;
     const frame = requestAnimationFrame(() => composerRef.current?.focus());

@@ -140,3 +140,103 @@ test("choosing a comment, or the comment being written, in the panel shows it in
   expect(onShowComment).toHaveBeenLastCalledWith({ file: "src/a.ts", line: 2, side: "RIGHT" });
   slot.lifecycle.unmount();
 });
+
+const reviewerSaid = (body: string) => ({ author: "reviewer", kind: "message", body, createdAt: 1 });
+
+test("asking the agent about its comment opens a box under it, and the agent answers in the comment's discussion", async () => {
+  const agents = { file: "src/a.ts", line: 2, side: "RIGHT", author: "agent", body: "Is this tested?" };
+  let discussions: any[] = [];
+  const askAgent = vi.fn(async ({ body }: any) => {
+    discussions = [{ file: "src/a.ts", line: 2, side: "RIGHT", waiting: true, entries: [reviewerSaid(body)] }];
+    return { draft: { ...empty("ask"), comments: [agents] }, stale: [], discussions };
+  });
+  const { slot, diff, panel } = await renderReview("ask", { getDraft: () => ({ draft: { ...empty("ask"), comments: [agents] }, stale: [], discussions }), askAgent });
+  const shown = await diff().findByRole("article", { name: "Draft comment on src/a.ts:2" });
+  fireEvent.click(within(shown).getByRole("button", { name: "Ask agent" }));
+  const box = diff().getByRole("textbox", { name: "Message to agent" });
+  await waitFor(() => expect(document.activeElement).toBe(box));
+  // The box sits under the comment, which stays.
+  expect(box.closest("[data-draft-at]")).toBe(diff().getByRole("article", { name: "Draft comment on src/a.ts:2" }).closest("[data-draft-at]"));
+  expect(panel().getByText("Writing to the agent about src/a.ts:2 in the diff.")).toBeTruthy();
+  fireEvent.change(box, { target: { value: "It is, in a.test.ts." } });
+  fireEvent.click(diff().getByRole("button", { name: "Send to agent" }));
+  await waitFor(() => expect(askAgent).toHaveBeenCalledWith({ targetKey: "ask", file: "src/a.ts", line: 2, side: "RIGHT", body: "It is, in a.test.ts." }));
+  const discussion = await diff().findByRole("region", { name: "Discussion with agent on src/a.ts:2" });
+  expect(within(discussion).getByText("It is, in a.test.ts.")).toBeTruthy();
+  expect(within(discussion).getByRole("status").textContent).toBe("Waiting for agent…");
+  expect(diff().queryByRole("textbox")).toBeNull();
+  expect(panel().getByRole("button", { name: "src/a.ts:2 · Changed · Added by agent · 1 message · Waiting for agent" })).toBeTruthy();
+
+  discussions = [{ ...discussions[0], waiting: false, entries: [...discussions[0].entries, { author: "agent", kind: "message", body: "Then I'll drop it.", createdAt: 2 }, { author: "agent", kind: "removed", body: "", createdAt: 3 }] }];
+  await slot.emitRealtime("draft:ask", {});
+  await within(discussion).findByText("Then I'll drop it.");
+  expect(within(discussion).queryByRole("status")).toBeNull();
+  slot.lifecycle.unmount();
+});
+
+test("the comment box can send its text to the agent instead, which starts a discussion at the line until it's dismissed", async () => {
+  let discussions: any[] = [];
+  const saveDraftComment = vi.fn();
+  const askAgent = vi.fn(async ({ body }: any) => {
+    discussions = [{ file: "src/a.ts", line: 2, side: "RIGHT", waiting: false, entries: [reviewerSaid(body)] }];
+    return { draft: empty("question"), stale: [], discussions };
+  });
+  const dismissDiscussion = vi.fn(async () => { discussions = []; return { draft: empty("question"), stale: [], discussions }; });
+  const { slot, diff } = await renderReview("question", { getDraft: () => ({ draft: empty("question"), stale: [], discussions }), saveDraftComment, askAgent, dismissDiscussion });
+  fireEvent.click(diff().getByRole("button", { name: "Gutter +" }));
+  fireEvent.change(diff().getByRole("textbox", { name: "Draft comment" }), { target: { value: "Why two lines?" } });
+  fireEvent.click(diff().getByRole("button", { name: "Ask agent" }));
+  await waitFor(() => expect(askAgent).toHaveBeenCalledWith({ targetKey: "question", file: "src/a.ts", line: 2, side: "RIGHT", body: "Why two lines?" }));
+  expect(saveDraftComment).not.toHaveBeenCalled();
+  const discussion = await diff().findByRole("region", { name: "Discussion with agent on src/a.ts:2" });
+  expect(diff().getByText("Discussion with agent")).toBeTruthy();
+  expect(within(discussion).getByText("Why two lines?")).toBeTruthy();
+  // The agent finished without answering here.
+  expect(within(discussion).getByText("The agent didn’t reply here.")).toBeTruthy();
+  expect(diff().queryByRole("article")).toBeNull();
+  fireEvent.click(diff().getByRole("button", { name: "Dismiss" }));
+  await waitFor(() => expect(dismissDiscussion).toHaveBeenCalledWith({ targetKey: "question", file: "src/a.ts", line: 2, side: "RIGHT" }));
+  await waitFor(() => expect(diff().queryByRole("region")).toBeNull());
+  slot.lifecycle.unmount();
+});
+
+test("asking about selected lines opens a message box at the last line, and quotes from the first", async () => {
+  await loadPluginApp(() => import("../app"));
+  const { DraftTray } = await import("./DraftTray");
+  const { DiffViewer } = await import("./DiffViewer");
+  const askAgent = vi.fn(async () => ({ draft: empty("lines"), stale: [], discussions: [] }));
+  function Review() {
+    const [nonce, setNonce] = useState(0);
+    return <>
+      <button onClick={() => setNonce((value) => value + 1)}>Ask about selected lines</button>
+      <DraftTray targetKey="lines" activeChapterId="c1" activeFiles={["src/a.ts"]} reviewRevision="r1" prefill={nonce ? { file: "src/a.ts", line: 2, side: "RIGHT", startLine: 1, ask: true, nonce } : undefined}>
+        <DiffViewer patch={patch} files={["src/a.ts"]} views={new Map()} onToggleViewed={() => {}} />
+      </DraftTray>
+    </>;
+  }
+  const slot = renderSlot({ component: Review }, {}, { rpc: { setReviewPresence: () => ({ ok: true }), getReviewerNotes: () => ({ body: "", revision: 0 }), getDraft: () => ({ draft: empty("lines"), stale: [], discussions: [] }), askAgent } });
+  await slot.findByText("Draft saved");
+  fireEvent.click(slot.getByRole("button", { name: "Ask about selected lines" }));
+  const box = await within(slot.getByTestId("filediff")).findByRole("textbox", { name: "Message to agent" });
+  expect(box.closest("[data-draft-at]")?.getAttribute("data-draft-at")).toBe("src/a.ts:2:RIGHT");
+  fireEvent.change(box, { target: { value: "Why both?" } });
+  fireEvent.click(slot.getByRole("button", { name: "Send to agent" }));
+  await waitFor(() => expect(askAgent).toHaveBeenCalledWith({ targetKey: "lines", file: "src/a.ts", line: 2, side: "RIGHT", startLine: 1, body: "Why both?" }));
+  slot.lifecycle.unmount();
+});
+
+test("a comment the agent removed leaves its discussion at the line, and an unsent message to the agent survives a reload", async () => {
+  const removed = { file: "src/a.ts", line: 2, side: "RIGHT", waiting: false, entries: [reviewerSaid("Drop this one."), { author: "agent", kind: "removed", body: "", createdAt: 2 }] };
+  const rpc = { getDraft: () => ({ draft: empty("stub"), stale: [], discussions: [removed] }) };
+  let { slot, diff } = await renderReview("stub", rpc);
+  const discussion = await diff().findByRole("region", { name: "Discussion with agent on src/a.ts:2" });
+  expect(diff().getByText("Removed by agent")).toBeTruthy();
+  expect(within(discussion).getByText("Agent removed the comment.")).toBeTruthy();
+  expect(within(discussion).queryByText("The agent didn’t reply here.")).toBeNull();
+  fireEvent.click(diff().getByRole("button", { name: "Ask agent" }));
+  fireEvent.change(diff().getByRole("textbox", { name: "Message to agent" }), { target: { value: "Why?" } });
+  slot.lifecycle.unmount();
+  ({ slot, diff } = await renderReview("stub", rpc));
+  expect((diff().getByRole("textbox", { name: "Message to agent" }) as HTMLTextAreaElement).value).toBe("Why?");
+  slot.lifecycle.unmount();
+});

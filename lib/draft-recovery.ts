@@ -2,8 +2,11 @@ import type { Verdict } from "../src/draft";
 
 export type DraftRecovery = {
   summary?: { verdict: Verdict; body: string; revision?: string; editId?: string };
-  /** `inline` when the comment was being written in the diff rather than the panel. */
-  composer?: { file: string; line: string; side: "LEFT" | "RIGHT"; body: string; revision?: string; inline?: boolean };
+  /**
+   * `inline` when the comment was being written in the diff rather than the panel;
+   * `asking` when it was a message to the agent, about lines from `startLine`.
+   */
+  composer?: { file: string; line: string; side: "LEFT" | "RIGHT"; body: string; revision?: string; inline?: boolean; asking?: boolean; startLine?: number };
 };
 const key = (targetKey: string) => `guided-review:draft-recovery:${targetKey}`;
 
@@ -14,7 +17,7 @@ export function readDraftRecovery(targetKey: string): DraftRecovery {
     const result: DraftRecovery = {};
     const revisionValid = (item: any) => item.revision === undefined || typeof item.revision === "string";
     if (value.summary && revisionValid(value.summary) && typeof value.summary.body === "string" && ["COMMENT", "APPROVE", "REQUEST_CHANGES"].includes(value.summary.verdict)) result.summary = value.summary;
-    if (value.composer && revisionValid(value.composer) && ["file", "line", "body"].every(k => typeof value.composer[k] === "string") && ["LEFT", "RIGHT"].includes(value.composer.side) && [undefined, true, false].includes(value.composer.inline)) result.composer = value.composer;
+    if (value.composer && revisionValid(value.composer) && ["file", "line", "body"].every(k => typeof value.composer[k] === "string") && ["LEFT", "RIGHT"].includes(value.composer.side) && [undefined, true, false].includes(value.composer.inline) && [undefined, true, false].includes(value.composer.asking) && (value.composer.startLine === undefined || Number.isInteger(value.composer.startLine))) result.composer = value.composer;
     return result;
   } catch { return {}; }
 }

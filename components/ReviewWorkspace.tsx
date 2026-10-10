@@ -312,16 +312,19 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     setLineSel(range ? { file, range } : null);
   }, []);
 
-  function commentOnLines() {
+  function commentOnLines(ask = false) {
     if (!lineSel) return;
     const { file, range } = lineSel;
     const side = (range.endSide ?? range.side) === "deletions" ? "LEFT" : "RIGHT";
-    setDraftPrefill({ file, line: range.end, side, nonce: Date.now() });
+    setDraftPrefill({ file, line: range.end, side, startLine: range.start, ask, nonce: Date.now() });
     setLineSel(null);
   }
 
+  // Asking opens a box at the lines, and the agent answers there. An archived
+  // review's draft can't change, so its lines are quoted into the chat instead.
   function askAboutLines() {
     if (!lineSel) return;
+    if (review?.prState !== "MERGED" && review?.prState !== "CLOSED") return commentOnLines(true);
     const { file, range } = lineSel;
     const side = (range.endSide ?? range.side) === "deletions" ? "deletions" : "additions";
     setInjection({
@@ -551,7 +554,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
             </span>
           </span>
           <span className="h-4 w-px bg-border" />
-          <Button size="sm" variant="ghost" className="h-9 md:h-7 gap-1 px-2 text-xs" onClick={commentOnLines}>
+          <Button size="sm" variant="ghost" className="h-9 md:h-7 gap-1 px-2 text-xs" onClick={() => commentOnLines()}>
             <Icon name="BubbleChatQuestion" className="size-3.5" aria-hidden />
             Add comment
           </Button>

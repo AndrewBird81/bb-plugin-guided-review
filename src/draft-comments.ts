@@ -22,7 +22,7 @@ export function assistantReview(store: Store, threadId: string): string | null {
   return store.listAssistantThreads().find((thread) => thread.threadId === threadId)?.targetKey ?? null;
 }
 
-function unchangeable(review: ReviewMeta | null): string | null {
+export function unchangeable(review: ReviewMeta | null): string | null {
   if (!review) return "This review no longer exists.";
   if (review.status === "generating") return "The review is being regenerated. Wait until it finishes, then read the new diff.";
   if (review.prState === "MERGED" || review.prState === "CLOSED") return `This PR is ${review.prState.toLowerCase()}, so its draft can't be submitted.`;
@@ -71,6 +71,7 @@ export function addComment(store: Store, targetKey: string, input: NewComment): 
   const existing = store.getDraft(targetKey).comments.find((c) => sameLocation(c, at));
   if (existing) return { ok: false, error: `${where(at)} already has a draft comment: "${existing.body.slice(0, 300)}". Edit it instead, or make your point elsewhere. Nothing was added.` };
   store.upsertDraftComment(targetKey, { ...at, author: "agent", body: input.body.trim() });
+  store.noteDiscussionChange(targetKey, at, "added");
   return { ok: true, text: `Added a draft comment on ${where(at)}. It stays in bb until the reviewer submits the review.` };
 }
 
@@ -80,6 +81,7 @@ export function editComment(store: Store, targetKey: string, input: LocationInpu
   if (refused) return { ok: false, error: refused };
   const at = located(input);
   if (!store.editDraftComment(targetKey, at, input.body.trim())) return { ok: false, error: `There's no draft comment on ${where(at)}.` };
+  store.noteDiscussionChange(targetKey, at, "edited");
   return { ok: true, text: `Updated the draft comment on ${where(at)}.` };
 }
 
@@ -88,5 +90,15 @@ export function deleteComment(store: Store, targetKey: string, input: LocationIn
   if (refused) return { ok: false, error: refused };
   const at = located(input);
   if (!store.deleteDraftComment(targetKey, at)) return { ok: false, error: `There's no draft comment on ${where(at)}.` };
+  store.noteDiscussionChange(targetKey, at, "removed");
   return { ok: true, text: `Deleted the draft comment on ${where(at)}.` };
+}
+
+/** Answer the reviewer in the discussion they started at a line. */
+export function replyInDiscussion(store: Store, targetKey: string, input: LocationInput & { body: string }): DraftResult {
+  if (!store.getReview(targetKey)) return { ok: false, error: "This review no longer exists." };
+  const at = located(input);
+  if (!store.listDiscussions(targetKey).some((d) => sameLocation(d, at))) return { ok: false, error: `There's no discussion on ${where(at)}. The reviewer starts discussions; answer other messages in the chat.` };
+  store.addDiscussionMessage(targetKey, at, "agent", input.body.trim());
+  return { ok: true, text: `Replied in the discussion on ${where(at)}. The reviewer reads it there.` };
 }

@@ -17,6 +17,26 @@ export function sameLocation(a: CommentLocation, b: CommentLocation): boolean {
   return a.file === b.file && a.line === b.line && a.side === b.side;
 }
 
+/** A message in a line's discussion with the review assistant, or the assistant's change to the line's draft comment. */
+export interface DiscussionEntry {
+  author: "reviewer" | "agent";
+  kind: "message" | "added" | "edited" | "removed";
+  body: string;
+  createdAt: number;
+}
+
+/**
+ * The reviewer's discussion with the review assistant at a line, kept apart
+ * from the line's draft comment and never sent to GitHub. A line has at most one.
+ */
+export interface Discussion extends CommentLocation {
+  entries: DiscussionEntry[];
+  /** The other end of the lines the reviewer first asked about, when they selected several. */
+  startLine?: number;
+  /** The assistant hasn't answered the reviewer's latest message yet, and may still. */
+  waiting: boolean;
+}
+
 export interface Draft {
   targetKey: string;
   verdict: Verdict;

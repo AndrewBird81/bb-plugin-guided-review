@@ -159,7 +159,7 @@ test("agents.configure exposes tools/skill only to this plugin's own generation 
   const agentThread = await h.harness.behavior.resolveAgentConfiguration(
     baseConfigContext("guided-review", "Review agent: pr-1"),
   );
-  expect(agentThread.tools.map((t) => t.name)).toEqual(["read_review_patch", "list_draft_comments", "add_draft_comment", "edit_draft_comment", "delete_draft_comment"]);
+  expect(agentThread.tools.map((t) => t.name)).toEqual(["read_review_patch", "list_draft_comments", "add_draft_comment", "edit_draft_comment", "delete_draft_comment", "reply_in_discussion"]);
   expect(agentThread.skills).toEqual([]);
 
   // An unrelated same-plugin thread still gets nothing.

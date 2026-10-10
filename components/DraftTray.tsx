@@ -4,7 +4,7 @@ import { useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
 import { reviewState, type ReviewItem } from "../lib/review-state";
-import { sameLocation, type CommentLocation, type Draft, type DraftComment, type Verdict } from "../src/draft";
+import { sameLocation, type CommentLocation, type Discussion, type Draft, type DraftComment, type Verdict } from "../src/draft";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
@@ -17,8 +17,11 @@ import { readDraftRecovery, updateDraftRecovery } from "../lib/draft-recovery";
 import { usePortalScopeProps } from "../lib/portal-scope";
 import { InlineComposerContext, InlineDraftContext, type InlineComposer, type InlineDraft } from "./InlineDraft";
 
-/** A request to comment on a line, from the diff; the comment box opens there. */
-export interface CommentPrefill { file: string; line: number; side: "LEFT" | "RIGHT"; nonce: number; }
+/**
+ * A request from the diff to comment on a line, or with `ask` to message the
+ * agent about it; the box opens there. `startLine` is the other end of a selection.
+ */
+export interface CommentPrefill { file: string; line: number; side: "LEFT" | "RIGHT"; startLine?: number; ask?: boolean; nonce: number; }
 
 export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, activeFiles, prefill, isLocal = false, review, onSubmitted, onShowComment, agent, reviewRevision, account, children }: {
   targetKey: string; activeChapterId: string; activeFiles: string[]; prefill?: CommentPrefill; isLocal?: boolean; review?: ReviewItem; onSubmitted?: () => void; onShowComment?: (at: CommentLocation) => void;
@@ -41,7 +44,11 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
   const [editing, setEditing] = useState<DraftComment | null>(null);
   // Whether the open comment box is in the diff rather than this panel.
   const [inline, setInline] = useState(false);
+  // Whether the box's text is a message to the agent rather than a comment, and the other end of the lines it's about.
+  const [asking, setAsking] = useState(false);
+  const [startLine, setStartLine] = useState<number | undefined>();
   const [stale, setStale] = useState<CommentLocation[]>([]);
+  const [discussions, setDiscussions] = useState<Discussion[]>([]);
   const [writeAnother, setWriteAnother] = useState(false);
   const [receipt, setReceipt] = useState<Verdict | null>(null);
   const [showNotes, setShowNotes] = useState(false);
@@ -77,8 +84,8 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
 
   useEffect(() => {
     if (!loaded) return;
-    updateDraftRecovery(targetKey, { composer: body ? { file, line, side, body, revision: composerRevision.current, inline } : undefined });
-  }, [loaded, targetKey, file, line, side, body, inline]);
+    updateDraftRecovery(targetKey, { composer: body ? { file, line, side, body, revision: composerRevision.current, inline, ...(asking ? { asking } : {}), ...(startLine ? { startLine } : {}) } : undefined });
+  }, [loaded, targetKey, file, line, side, body, inline, asking, startLine]);
   useEffect(() => {
     const protect = (event: BeforeUnloadEvent) => { if (body.trim() || summary.current.dirty) event.preventDefault(); };
     window.addEventListener("beforeunload", protect);
@@ -126,6 +133,7 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
       const recovered = readDraftRecovery(targetKey);
       setDraft({ ...next, ...(recovered.summary ? { verdict: recovered.summary.verdict, body: recovered.summary.body } : {}) });
       setStale(result.stale ?? []);
+      setDiscussions(result.discussions ?? []);
       summary.current = { verdict: recovered.summary?.verdict ?? next.verdict, body: recovered.summary?.body ?? next.body, revision: 0, dirty: !!recovered.summary };
       if (recovered.summary) {
         summaryRevision.current = recovered.summary.revision;
@@ -137,7 +145,8 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
         const comment = recovered.composer;
         composerRevision.current = comment.revision;
         setFile(comment.file); setLine(comment.line); setSide(comment.side); setBody(comment.body); setInline(comment.inline === true); setShowComposer(true);
-        setEditing(next.comments.find((c) => sameLocation(c, { file: comment.file, line: Number(comment.line), side: comment.side })) ?? null);
+        setAsking(comment.asking === true); setStartLine(comment.startLine);
+        setEditing(comment.asking ? null : next.comments.find((c) => sameLocation(c, { file: comment.file, line: Number(comment.line), side: comment.side })) ?? null);
       }
       setLoaded(true);
     } catch {
@@ -157,15 +166,20 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
   useRealtime(`draft:${targetKey}`, refreshComments);
 
   useEffect(() => { if (!showComposer && !body.trim()) setFile(activeFiles[0] ?? ""); }, [activeFiles, showComposer, body]);
-  /** Open the comment box, in the diff or this panel, on a line's comment if it has one. An unfinished comment is shown instead. */
-  function openComposer(at: CommentLocation | null, inDiff: boolean) {
+  /**
+   * Open the comment box, in the diff or this panel, on a line's comment if it has one;
+   * with `ask`, a box for a message to the agent. An unfinished comment or message is shown instead.
+   */
+  function openComposer(at: (CommentLocation & { startLine?: number }) | null, inDiff: boolean, ask = false) {
     const writing = !!body.trim();
-    if (writing) toast.info("Finish or cancel the comment you’re writing first.");
+    if (writing) toast.info(asking ? "Send or cancel your message to the agent first." : "Finish or cancel the comment you’re writing first.");
     else {
-      const existing = at && draft.comments.find((comment) => sameLocation(comment, at));
+      const existing = !ask && at ? draft.comments.find((comment) => sameLocation(comment, at)) : undefined;
       composerRevision.current = revisionRef.current;
       setEditing(existing ?? null);
       if (at) { setFile(at.file); setLine(String(at.line)); setSide(at.side); }
+      setStartLine(at?.startLine !== at?.line ? at?.startLine : undefined);
+      setAsking(ask);
       setBody(existing ? existing.body : "");
       setInline(inDiff);
       setShowComposer(true);
@@ -173,12 +187,12 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
     if (writing ? !inline : !inDiff) { setTab("draft"); setToolsOpen(true); }
     requestAnimationFrame(() => bodyRef.current?.focus());
   }
-  useEffect(() => { if (prefill) openComposer(prefill, true); }, [prefill]);
+  useEffect(() => { if (prefill) openComposer(prefill, true, prefill.ask); }, [prefill]);
   function changeBody(text: string) {
     if (!body) composerRevision.current = revisionRef.current;
     setBody(text);
   }
-  function closeComposer() { setBody(""); setEditing(null); setShowComposer(false); }
+  function closeComposer() { setBody(""); setEditing(null); setAsking(false); setStartLine(undefined); setShowComposer(false); }
 
   function updateSummary(change: Partial<Pick<Draft, "verdict" | "body">>) {
     setDraft((previous) => ({ ...previous, ...change }));
@@ -199,10 +213,24 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
     finally { lock.current = false; if (mounted.current) setBusy(false); }
   }
 
-  function updateComments(next: { draft: Draft; stale?: CommentLocation[] }) {
+  function updateComments(next: { draft: Draft; stale?: CommentLocation[]; discussions?: Discussion[] }) {
     if (!mounted.current) return;
     setDraft((previous) => ({ ...previous, comments: next.draft.comments }));
     setStale(next.stale ?? []);
+    setDiscussions(next.discussions ?? []);
+  }
+  /** Send the box's text to the agent, which answers in the line's discussion. */
+  async function askAgent() {
+    if (!body.trim()) return;
+    await mutate(async () => {
+      const result = await enqueue(() => rpc.call("askAgent", { targetKey, file, line: Number(line), side, ...(startLine ? { startLine } : {}), body: body.trim() }));
+      updateComments(result); closeComposer();
+    });
+  }
+  async function dismissDiscussion({ file, line, side }: CommentLocation) {
+    await mutate(async () => {
+      updateComments(await enqueue(() => rpc.call("dismissDiscussion", { targetKey, file, line, side })));
+    });
   }
   async function addComment() {
     if (!file.trim() || !body.trim() || !Number.isInteger(Number(line)) || Number(line) < 1) return;
@@ -236,22 +264,27 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
   const submittedVerdict = review ? review.submittedVerdict : receipt;
   const closed = review?.prState === "MERGED" || review?.prState === "CLOSED";
   const completed = submittedVerdict && !hasReview && !writeAnother && !body.trim();
-  // The diff shows the draft's comments, and the comment box while it's open there.
-  const latest = useRef({ openComposer, removeComment, addComment, changeBody, closeComposer });
-  latest.current = { openComposer, removeComment, addComment, changeBody, closeComposer };
+  // The diff shows the draft's comments and discussions, and the comment box while it's open there.
+  const latest = useRef({ openComposer, removeComment, addComment, askAgent, dismissDiscussion, changeBody, closeComposer });
+  latest.current = { openComposer, removeComment, addComment, askAgent, dismissDiscussion, changeBody, closeComposer };
   const open = useCallback((at: CommentLocation) => latest.current.openComposer(at, true), []);
+  const ask = useCallback((at: CommentLocation) => latest.current.openComposer(at, true, true), []);
   const remove = useCallback((comment: DraftComment) => { void latest.current.removeComment(comment); }, []);
+  const dismiss = useCallback((at: CommentLocation) => { void latest.current.dismissDiscussion(at); }, []);
+  const showChat = useCallback(() => { setTab("agent"); setToolsOpen(true); }, []);
   const editable = loaded && !loadError && !closed;
   const writing = !!body.trim();
   const composerInDiff = editable && showComposer && inline;
+  const chat = agent ? showChat : null;
   const inlineDraft = useMemo<InlineDraft>(() => ({
-    comments: draft.comments, stale, editable, busy, writing, open, remove,
-    composer: composerInDiff ? { file, line: Number(line), side, editing: editing !== null } : null,
-  }), [draft.comments, stale, editable, busy, writing, open, remove, composerInDiff, file, line, side, editing]);
+    comments: draft.comments, stale, discussions, editable, busy, writing, open, ask, remove, dismiss, chat,
+    composer: composerInDiff ? { file, line: Number(line), side, editing: editing !== null, asking } : null,
+  }), [draft.comments, stale, discussions, editable, busy, writing, open, ask, remove, dismiss, chat, composerInDiff, file, line, side, editing, asking]);
   const inlineComposer = useMemo<InlineComposer | null>(() => composerInDiff ? {
     body, textareaRef: bodyRef,
     change: (text) => latest.current.changeBody(text),
     save: () => { void latest.current.addComment(); },
+    askAgent: () => { void latest.current.askAgent(); },
     cancel: () => latest.current.closeComposer(),
   } : null, [composerInDiff, body]);
   const toolItems = [
@@ -297,12 +330,12 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
             <div className="flex flex-wrap items-center justify-between gap-2"><span role="status" className="text-xs text-muted-foreground">{saved}</span><Button variant="ghost" size="sm" aria-expanded={showComposer && !inline} onClick={() => openComposer(null, false)}><Icon name="Plus" className="size-4" aria-hidden /> Add comment</Button></div>
             {saved.startsWith("Couldn’t") && <Button variant="outline" size="sm" onClick={() => void flush().catch(() => {})}>Save again</Button>}
             {draft.comments.length ? <ul className="divide-y divide-border text-sm">{draft.comments.map((comment) => <li key={`${comment.file}:${comment.line}:${comment.side}`} className="space-y-2 py-3 first:pt-0">
-              <button type="button" className="block w-full break-all text-left text-xs text-muted-foreground hover:text-foreground hover:underline" onClick={() => onShowComment?.(comment)}>{comment.file}:{comment.line} · {comment.side === "LEFT" ? "Original" : "Changed"}{comment.author === "agent" ? " · Added by agent" : ""}{stale.some((at) => sameLocation(at, comment)) ? " · Older diff" : ""}</button>
+              <button type="button" className="block w-full break-words text-left text-xs text-muted-foreground hover:text-foreground hover:underline" onClick={() => onShowComment?.(comment)}>{comment.file}:{comment.line} · {comment.side === "LEFT" ? "Original" : "Changed"}{comment.author === "agent" ? " · Added by agent" : ""}{stale.some((at) => sameLocation(at, comment)) ? " · Older diff" : ""}{discussionLabel(discussions.find((d) => sameLocation(d, comment)))}</button>
               <p className="whitespace-pre-wrap break-words">{comment.body}</p>
               <div className="flex gap-1"><Button variant="ghost" size="sm" disabled={busy || !!body.trim()} aria-label={`Edit comment on ${comment.file}:${comment.line}`} onClick={() => openComposer(comment, false)}>Edit</Button><Button variant="ghost" size="sm" disabled={busy} aria-label={`Remove comment on ${comment.file}:${comment.line}`} onClick={() => void removeComment(comment)}>Remove</Button></div>
             </li>)}</ul> : !showComposer && <p className="py-4 text-sm leading-relaxed text-muted-foreground">Select a line in the diff or add a comment here.</p>}
             {showComposer && (inline ? <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3 text-xs text-muted-foreground">
-              <span className="min-w-0 flex-1 break-words">Writing a comment on {file}:{line} in the diff.</span>
+              <span className="min-w-0 flex-1 break-words">{asking ? `Writing to the agent about ${file}:${line} in the diff.` : `Writing a comment on ${file}:${line} in the diff.`}</span>
               <Button variant="ghost" size="sm" onClick={() => onShowComment?.({ file, line: Number(line), side })}>Show in diff</Button>
             </div> : <div className="space-y-3 border-t border-border pt-3">
               <label className="block space-y-1 text-xs text-muted-foreground">File<Input aria-label="Comment file" disabled={busy || !!editing} value={file} onChange={(event) => setFile(event.target.value)} /></label>
@@ -325,7 +358,7 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
               </div>
               <Button className="w-full" disabled={busy || !hasReview || !!body.trim()} onClick={() => void submit()}>{busy ? "Saving…" : "Submit to GitHub"}</Button>
             </>}
-            <p className="text-xs leading-relaxed text-muted-foreground">{isLocal ? "Local review. Comments and notes stay in this BB installation." : body.trim() ? "Add the comment you’re writing to the draft before submitting." : "Drafts stay in BB until you submit."}</p>
+            <p className="text-xs leading-relaxed text-muted-foreground">{isLocal ? "Local review. Comments and notes stay in this BB installation." : body.trim() ? asking ? "Send or cancel your message to the agent before submitting." : "Add the comment you’re writing to the draft before submitting." : "Drafts stay in BB until you submit."}</p>
           </div>
         </section>}
     </div>
@@ -334,3 +367,10 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
   </InlineComposerContext.Provider></InlineDraftContext.Provider>;
 });
 DraftTray.displayName = "DraftTray";
+
+/** How a comment's discussion with the agent reads in the panel. */
+function discussionLabel(discussion: Discussion | undefined): string {
+  if (!discussion) return "";
+  const messages = discussion.entries.filter((entry) => entry.kind === "message").length;
+  return `${messages ? ` · ${messages} message${messages === 1 ? "" : "s"}` : ""}${discussion.waiting ? " · Waiting for agent" : ""}`;
+}

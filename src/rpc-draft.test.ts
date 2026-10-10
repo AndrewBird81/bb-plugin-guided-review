@@ -36,9 +36,12 @@ test("draft comment then submit builds a batched review", async () => {
     comment: { file: "a.ts", line: 1, side: "RIGHT", body: "nit" },
   });
   await harness.behavior.callRpc("setVerdict", { targetKey: "pr-1", revision, verdict: "COMMENT", body: "ok" });
+  store.addDiscussionMessage("pr-1", { file: "a.ts", line: 1, side: "RIGHT" }, "reviewer", "Too picky?");
   const res = await harness.behavior.callRpc("submitReview", { targetKey: "pr-1", revision, account: "casey" });
   expect((res as any).ok).toBe(true);
   expect(submit).toHaveBeenCalled();
+  // Discussions were about the draft.
+  expect(store.listDiscussions("pr-1")).toEqual([]);
 });
 
 test("draft reads and writes report comments drafted against an older diff", async () => {

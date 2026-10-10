@@ -13,7 +13,8 @@ import { runReviewCommand } from "./src/review-command";
 import { createPrReview } from "./src/start-review";
 import { assistantInstructions, getConversation, isAssistantAnswering, newConversation, refreshAssistants, startConversation } from "./src/agent";
 import { listMachines } from "./src/machines";
-import { addComment, assistantReview, deleteComment, describeComments, editComment, type DraftResult } from "./src/draft-comments";
+import { addComment, assistantReview, deleteComment, describeComments, editComment, replyInDiscussion, type DraftResult } from "./src/draft-comments";
+import { askAgent, settleDiscussions } from "./src/discussions";
 import { runCommentCommand } from "./src/comment-command";
 import { isMissingThread } from "./src/thread-errors";
 import { computeFileViewState, hashForFile } from "./src/file-views";
@@ -44,6 +45,9 @@ import { createPluginUpdates } from "./src/plugin-updates";
 
 export { rpcContract } from "./src/rpc-contract";
 
+// Raise when the review assistant's tools change.
+const ASSISTANT_TOOLS = 2;
+
 export default async function plugin(bb: BbPluginApi) {
   const store = createStore(bb);
   store.interruptGenerations();
@@ -72,8 +76,12 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.log.info("guided-review loaded");
 
-  // Comments drafted against an older diff, which submitting refuses.
-  const staleComments = (targetKey: string) => store.staleDraftComments(targetKey).map(({ file, line, side }) => ({ file, line, side }));
+  // The draft, its comments drafted against an older diff (which submitting refuses), and the discussions at its lines.
+  const draftState = (targetKey: string, draft = store.getDraft(targetKey)) => ({
+    draft,
+    stale: store.staleDraftComments(targetKey).map(({ file, line, side }) => ({ file, line, side })),
+    discussions: store.listDiscussions(targetKey),
+  });
 
   const handlers: Omit<Parameters<typeof bb.rpc.register<typeof rpcContract>>[1], keyof typeof import("./src/plugin-updates").releaseRpc> = {
     async getSetupStatus() {
@@ -244,16 +252,26 @@ export default async function plugin(bb: BbPluginApi) {
 
     // Task 11: draft + submit
     getDraft({ targetKey }) {
-      return { draft: store.getDraft(targetKey), stale: staleComments(targetKey) };
+      return draftState(targetKey);
     },
     saveDraftComment({ targetKey, comment, revision }) {
       requireReviewRevision(store, targetKey, revision);
-      return { draft: store.upsertDraftComment(targetKey, comment), stale: staleComments(targetKey) };
+      return draftState(targetKey, store.upsertDraftComment(targetKey, comment));
     },
     removeDraftComment({ targetKey, file, line, side }) {
       // Already gone, for example deleted by an agent: the current draft shows that.
       const draft = store.deleteDraftComment(targetKey, { file, line, side }) ?? store.getDraft(targetKey);
-      return { draft, stale: staleComments(targetKey) };
+      store.deleteDiscussion(targetKey, { file, line, side });
+      return draftState(targetKey, draft);
+    },
+    async askAgent({ targetKey, ...input }) {
+      const { started } = await askAgent(bb, store, targetKey, input);
+      if (started) bb.realtime.publish(`conversation:${targetKey}`, {});
+      return draftState(targetKey);
+    },
+    dismissDiscussion({ targetKey, file, line, side }) {
+      store.deleteDiscussion(targetKey, { file, line, side });
+      return draftState(targetKey);
     },
     setVerdict({ targetKey, verdict, body, revision }) {
       requireReviewRevision(store, targetKey, revision);
@@ -263,6 +281,8 @@ export default async function plugin(bb: BbPluginApi) {
       if (!account) return { ok: false, error: "Verify your GitHub account before submitting. Reload this review to check access." };
       try { requireReviewRevision(store, targetKey, revision); } catch (error) { return { ok: false, error: (error as Error).message }; }
       const result = await submitReview(targetKey, revision, account, comments);
+      // The discussions were about this draft. The assistant's conversation keeps them.
+      if (result.ok) store.clearDiscussions(targetKey);
       bb.realtime.publish(`review:${targetKey}`, { ts: Date.now() });
       bb.realtime.publish("reviews", { ts: Date.now() });
       return result;
@@ -295,6 +315,8 @@ export default async function plugin(bb: BbPluginApi) {
     },
     async newConversation({ targetKey }) {
       await newConversation(bb, store, targetKey);
+      // The archived conversation won't answer discussions waiting for it.
+      if (store.stopWaiting(targetKey)) bb.realtime.publish(`draft:${targetKey}`, {});
       return { ok: true };
     },
     // GitHub account indicator + switcher
@@ -389,6 +411,20 @@ export default async function plugin(bb: BbPluginApi) {
     parameters: z.object(location),
     execute: (input, { threadId }) => assistantDraft(threadId, true, (targetKey) => deleteComment(store, targetKey, input)),
   });
+  bb.agents.registerTool({
+    name: "reply_in_discussion",
+    description: "Reply in the reviewer's discussion at a line of the diff, shown under the line's draft comment, or in its place when there's none. Only the reviewer sees it; nothing reaches GitHub. The reviewer starts discussions, so there must be one at that file, line, and side.",
+    instructions: "Messages from a discussion in the diff say which line they're about. When a reply is warranted, answer with reply_in_discussion on that line, where the reviewer reads it, and keep your chat reply to one short line. When they ask for a change to the draft comment there, make it with add_draft_comment, edit_draft_comment, or delete_draft_comment instead of describing it.",
+    parameters: z.object({ ...location, body: z.string().trim().min(1).describe("The reply, in Markdown.") }),
+    execute: (input, { threadId }) => assistantDraft(threadId, true, (targetKey) => replyInDiscussion(store, targetKey, input)),
+  });
+  // A discussion the assistant didn't answer by the end of its turn stops waiting for it.
+  const settle = async ({ thread }: { thread: { id: string } }) => {
+    const targetKey = await settleDiscussions(bb, store, thread.id);
+    if (targetKey) bb.realtime.publish(`draft:${targetKey}`, {});
+  };
+  bb.events.on("thread.idle", settle);
+  bb.events.on("thread.failed", settle);
 
   bb.agents.registerTool({
     name: "generate_review_guide",
@@ -431,12 +467,19 @@ export default async function plugin(bb: BbPluginApi) {
       const { targetKey } = context.pluginMetadata;
       const review = typeof targetKey === "string" ? store.getReview(targetKey) : null;
       return {
-        tools: ["read_review_patch", "list_draft_comments", "add_draft_comment", "edit_draft_comment", "delete_draft_comment"], skills: [],
+        tools: ["read_review_patch", "list_draft_comments", "add_draft_comment", "edit_draft_comment", "delete_draft_comment", "reply_in_discussion"], skills: [],
         ...(review ? { instructions: assistantInstructions(review.targetKey, store.getGuide(review.targetKey), store.getPreferences().preferences) } : {}),
       };
     }
     return { tools: [], skills: [] };
   });
+  // An assistant's runtime keeps the tools it started with. Restart idle ones
+  // once, so conversations from before reply_in_discussion get it.
+  void (async () => {
+    if (await bb.storage.kv.get<number>("assistant-tools") === ASSISTANT_TOOLS) return;
+    await refreshAssistants(bb, store);
+    await bb.storage.kv.set("assistant-tools", ASSISTANT_TOOLS);
+  })().catch(() => {});
 
   bb.cli.register({
     name: "review",

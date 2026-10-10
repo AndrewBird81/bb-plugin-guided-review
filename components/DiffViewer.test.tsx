@@ -69,7 +69,7 @@ test("a stale file shows a 'changed' pill", () => {
 const comment = { file: "src/a.ts", line: 2, side: "RIGHT" as const, author: "agent" as const, body: "Is the empty case tested?" };
 
 function renderWithDraft(draft: Partial<InlineDraft>, props: Partial<Parameters<typeof DiffViewer>[0]> = {}, composer?: InlineComposer) {
-  const value: InlineDraft = { comments: [], stale: [], editable: true, busy: false, writing: false, composer: null, open: vi.fn(), remove: vi.fn(), ...draft };
+  const value: InlineDraft = { comments: [], stale: [], discussions: [], editable: true, busy: false, writing: false, composer: null, open: vi.fn(), ask: vi.fn(), remove: vi.fn(), dismiss: vi.fn(), chat: null, ...draft };
   render(
     <InlineDraftContext.Provider value={value}>
       <InlineComposerContext.Provider value={composer ?? null}>
@@ -122,8 +122,8 @@ test("a draft that can't change shows its comments read-only, and the gutter + o
 });
 
 test("the comment box takes the place of the comment it edits", () => {
-  const composer: InlineComposer = { body: "Is the empty case tested?", change: vi.fn(), save: vi.fn(), cancel: vi.fn(), textareaRef: { current: null } };
-  renderWithDraft({ comments: [comment], writing: true, composer: { file: "src/a.ts", line: 2, side: "RIGHT", editing: true } }, {}, composer);
+  const composer: InlineComposer = { body: "Is the empty case tested?", change: vi.fn(), save: vi.fn(), askAgent: vi.fn(), cancel: vi.fn(), textareaRef: { current: null } };
+  renderWithDraft({ comments: [comment], writing: true, composer: { file: "src/a.ts", line: 2, side: "RIGHT", editing: true, asking: false } }, {}, composer);
   expect(screen.queryByRole("article")).toBeNull();
   const box = screen.getByRole("textbox", { name: "Draft comment" }) as HTMLTextAreaElement;
   expect(box.value).toBe("Is the empty case tested?");

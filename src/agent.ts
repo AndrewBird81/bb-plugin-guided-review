@@ -64,8 +64,8 @@ function choice(agent: AgentChoice): AgentChoice {
   return { ...(agent.hostId ? { hostId: agent.hostId } : {}), providerId: agent.providerId, model: agent.model, reasoningLevel: agent.reasoningLevel, ...(agent.serviceTier ? { serviceTier: agent.serviceTier } : {}) };
 }
 
-/** Start the review's assistant thread with the reviewer's first message. */
-export async function startConversation(bb: BbPluginApi, store: Store, args: { targetKey: string; text: string; agent: AgentChoice }): Promise<{ threadId: string }> {
+/** Start the review's assistant thread with the reviewer's first message, plus `context` only the assistant sees. */
+export async function startConversation(bb: BbPluginApi, store: Store, args: { targetKey: string; text: string; context?: string; agent: AgentChoice }): Promise<{ threadId: string }> {
   const review = store.getReview(args.targetKey);
   if (!review?.projectId) throw new Error("This review has no associated project; re-run `bb review` inside a project.");
   if (store.getAssistantThread(args.targetKey)) throw new Error("This review already has a conversation. Reload it to continue.");
@@ -77,6 +77,7 @@ export async function startConversation(bb: BbPluginApi, store: Store, args: { t
     ...(await agentPlacement(bb, args.agent, review.projectId)),
     input: [
       { type: "text", text: args.text, mentions: [] },
+      ...(args.context ? [{ type: "text" as const, text: args.context, mentions: [], visibility: "agent-only" as const }] : []),
       ...(legacy ? [{ type: "text" as const, text: `Previous review conversation:\n${legacy}`, mentions: [], visibility: "agent-only" as const }] : []),
     ],
     title: `Review agent: ${args.targetKey}`,
@@ -110,6 +111,25 @@ export async function startAutomaticReview(bb: BbPluginApi, store: Store, target
   const context = store.getReviewContext(targetKey);
   const text = context ? `${prompt}\n\nContext from the thread that started this review:\n${context}` : prompt;
   await startConversation(bb, store, { targetKey, text, agent: defaults });
+}
+
+/**
+ * Send the reviewer's message to the review's assistant, after its current
+ * work if it's busy, plus `context` only the assistant sees. Without a
+ * conversation, this starts one on the agent a new conversation defaults to.
+ */
+export async function messageAssistant(bb: BbPluginApi, store: Store, targetKey: string, text: string, context: string): Promise<{ started: boolean }> {
+  const { threadId, defaults } = await getConversation(bb, store, targetKey);
+  if (threadId) {
+    await bb.sdk.threads.send({ threadId, mode: "queue-if-active", input: [
+      { type: "text", text, mentions: [] },
+      { type: "text", text: context, mentions: [], visibility: "agent-only" },
+    ] });
+    return { started: false };
+  }
+  if (!defaults) throw new Error("Choose this review's agent first: open Ask agent and send it a message.");
+  await startConversation(bb, store, { targetKey, text, context, agent: defaults });
+  return { started: true };
 }
 
 /** Archive the review's conversation so the next message starts a fresh one. */

@@ -18,10 +18,19 @@ const commentShape = z
   })
   .strict();
 
-// A draft, plus where its comments were drafted against an older diff.
+const location = { file: z.string(), line: z.number().int(), side: z.enum(["LEFT", "RIGHT"]) };
+const discussion = z.object({
+  ...location,
+  entries: z.array(z.object({ author: z.enum(["reviewer", "agent"]), kind: z.enum(["message", "added", "edited", "removed"]), body: z.string(), createdAt: z.number() })),
+  startLine: z.number().int().optional(),
+  waiting: z.boolean(),
+});
+
+// A draft, where its comments were drafted against an older diff, and the discussions at its lines.
 const draftOutput = z.object({
   draft: z.any(),
-  stale: z.array(z.object({ file: z.string(), line: z.number().int(), side: z.enum(["LEFT", "RIGHT"]) })),
+  stale: z.array(z.object(location)),
+  discussions: z.array(discussion),
 });
 
 export const rpcContract = defineRpcContract({
@@ -102,6 +111,12 @@ export const rpcContract = defineRpcContract({
     input: z.object({ targetKey: z.string(), file: z.string(), line: z.number().int(), side: z.enum(["LEFT", "RIGHT"]) }).strict(),
     output: draftOutput,
   },
+  // A message from a line's discussion to the review assistant, which answers there.
+  askAgent: {
+    input: z.object({ targetKey: z.string(), ...location, startLine: z.number().int().min(1).optional(), body: z.string().trim().min(1).max(20_000) }).strict(),
+    output: draftOutput,
+  },
+  dismissDiscussion: { input: z.object({ targetKey: z.string(), ...location }).strict(), output: draftOutput },
   setVerdict: {
     input: z
       .object({

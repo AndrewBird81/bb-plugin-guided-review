@@ -87,6 +87,7 @@ test("deleteReview clears every per-review table and leaves other reviews intact
     s.setLifecycle(key, { userArchivedAt: 1 });
     s.saveReviewerNotes(key, "private", 0);
     s.setReviewContext(key, "Implements LIN-1");
+    s.addDiscussionMessage(key, { file: "a.ts", line: 1, side: "RIGHT" }, "reviewer", "Why?");
   }
   s.deleteReview("pr-1");
 

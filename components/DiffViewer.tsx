@@ -3,20 +3,20 @@ import { parsePatchFiles } from "@pierre/diffs";
 import { FileDiff } from "@pierre/diffs/react";
 import type { AnnotationSide, DiffLineAnnotation, FileDiffMetadata, FileDiffOptions, SelectedLineRange } from "@pierre/diffs";
 import { splitPatchByFile } from "../src/patch";
-import { sameLocation, type CommentLocation, type DraftComment } from "../src/draft";
+import { sameLocation, type CommentLocation } from "../src/draft";
 import { cn } from "../lib/utils";
 import { Icon } from "./ui/icon";
 import { FileTag } from "./FileTag";
 import { useMediaQuery } from "./ui/hooks/use-media-query";
-import { InlineDraftComment, InlineDraftComposer, InlineDraftContext, locationKey } from "./InlineDraft";
+import { InlineDraftContext, InlineLocation, locationKey } from "./InlineDraft";
 
 export interface FileViewFlags {
   viewed: boolean;
   stale: boolean;
 }
 
-/** What pierre shows under a line: a draft comment, or the comment box. */
-type Annotation = { kind: "comment"; comment: DraftComment } | { kind: "composer" };
+/** A line pierre shows a draft comment, discussion, or comment box under. Its content comes from InlineDraftContext. */
+type Annotation = CommentLocation;
 
 // NOTE: @pierre/diffs@1.3.6 — `parsePatchFiles` returns `ParsedPatch[]`, each
 // with a nested `.files`; `FileDiff`'s prop is `fileDiff` and the theme lives
@@ -50,7 +50,7 @@ function scrollToCenter(el: HTMLElement, behavior: ScrollBehavior) {
 }
 
 function renderAnnotation({ metadata }: DiffLineAnnotation<Annotation>) {
-  return metadata.kind === "composer" ? <InlineDraftComposer /> : <InlineDraftComment comment={metadata.comment} />;
+  return <InlineLocation at={metadata} />;
 }
 
 // One file's diff. Pierre redraws a file whenever its options or annotations
@@ -141,24 +141,27 @@ export const DiffViewer = memo(function DiffViewer({
     setCollapsed((c) => ({ ...c, [file]: next }));
   }
 
-  // Each file's draft comments and comment box. A file keeps its list until they change.
+  // The lines in each file with a draft comment, discussion, or the comment box.
+  // A file keeps its list until those lines change; their content comes from context.
   const previous = useRef(new Map<string, { key: string; list: DiffLineAnnotation<Annotation>[] }>());
   const annotations = useMemo(() => {
     const next = new Map<string, { key: string; list: DiffLineAnnotation<Annotation>[] }>();
     for (const path of files) {
       const composer = draft?.composer?.file === path ? draft.composer : null;
-      const comments = (draft?.comments ?? []).filter((c) => c.file === path && !(composer?.editing && sameLocation(c, composer)));
-      const key = JSON.stringify([composer && [composer.line, composer.side], comments.map((c) => [c.line, c.side, c.author, c.body])]);
+      const lines: CommentLocation[] = [];
+      for (const { file, line, side } of [...(draft?.comments ?? []), ...(draft?.discussions ?? [])]) {
+        const at = { file, line, side };
+        if (file === path && !(composer && sameLocation(at, composer)) && !lines.some((seen) => sameLocation(seen, at))) lines.push(at);
+      }
+      // The box's line comes first: pierre keys annotations by position, so lines coming and going don't remount it.
+      if (composer) lines.unshift({ file: path, line: composer.line, side: composer.side });
+      const key = JSON.stringify(lines.map((at) => [at.line, at.side]));
       const cached = previous.current.get(path);
-      next.set(path, cached?.key === key ? cached : { key, list: [
-        // The box comes first: pierre keys annotations by position, so comments coming and going don't remount it.
-        ...(composer ? [{ side: annotationSide(composer.side), lineNumber: composer.line, metadata: { kind: "composer" as const } }] : []),
-        ...comments.map((comment) => ({ side: annotationSide(comment.side), lineNumber: comment.line, metadata: { kind: "comment" as const, comment } })),
-      ] });
+      next.set(path, cached?.key === key ? cached : { key, list: lines.map((at) => ({ side: annotationSide(at.side), lineNumber: at.line, metadata: at })) });
     }
     previous.current = next;
     return next;
-  }, [files, draft?.comments, draft?.composer]);
+  }, [files, draft?.comments, draft?.discussions, draft?.composer]);
 
   // Opens the file, then scrolls to the line once the chapter's diffs stop moving:
   // pierre draws each file once its highlighting loads, then sizes the rows beside comments.
