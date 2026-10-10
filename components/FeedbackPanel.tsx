@@ -6,12 +6,14 @@ import type { Verdict } from "../src/draft";
 import type { FeedbackThread } from "../src/github/types";
 import type { AssessmentVerdict, FeedbackItem, FeedbackView } from "../lib/feedback";
 import { withLineBreaks } from "../src/line-breaks";
+import { readDraftRecovery } from "../lib/draft-recovery";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
 import { Badge, type Tone } from "./ui/badge";
 import { Avatar } from "./ui/avatar";
 import { Icon } from "./ui/icon";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./ui/dialog";
 import { FilePath } from "./ui/file-path";
 import { InlineCode } from "./ui/inline-code";
 import { timeAgo } from "./time-ago";
@@ -35,22 +37,23 @@ const STATUS_LOOK: Record<FeedbackThread["status"], { label: string; tone: Tone 
 
 const SUGGESTED_LABEL: Record<Verdict, string> = { APPROVE: "Approve", REQUEST_CHANGES: "Request changes", COMMENT: "Comment" };
 
-/** Needs a look first, then waiting on the author, then done. */
+/** Questions for you first, whatever the assistant's verdict, then what needs a look, then what waits on the author, then what's done. */
 export function feedbackRank(item: FeedbackItem): number {
-  const verdict = item.assessment?.verdict;
-  if (verdict) return verdict === "addressed" ? 2 : 0;
   const status = item.thread?.status;
-  return status === "resolved" || status === "answered" ? 2 : 1;
+  if (status === "question") return 0;
+  const verdict = item.assessment?.verdict;
+  if (verdict) return verdict === "addressed" ? 3 : 1;
+  return status === "resolved" || status === "answered" ? 3 : 2;
 }
 
-/** "4 of 5 addressed" from the assistant's check, or "2 of 5 resolved or answered" from GitHub. */
+/** "4 of 5 addressed" from the assistant's check, or "2 of 5 handled" (resolved or answered) from GitHub. */
 export function feedbackTally(items: FeedbackItem[]): string | null {
   if (items.some((item) => item.assessment)) {
     return `${items.filter((item) => item.assessment?.verdict === "addressed").length} of ${items.length} addressed`;
   }
   const threads = items.flatMap((item) => (item.thread ? [item.thread] : []));
   if (!threads.length) return null;
-  return `${threads.filter((thread) => thread.status === "resolved" || thread.status === "answered").length} of ${threads.length} resolved or answered`;
+  return `${threads.filter((thread) => thread.status === "resolved" || thread.status === "answered").length} of ${threads.length} handled`;
 }
 
 function VerdictChip({ verdict }: { verdict: AssessmentVerdict }) {
@@ -126,8 +129,8 @@ function ThreadCard({ item, thread, actions, onShowLocation, onFollowUp }: {
   item: FeedbackItem;
   thread: NonNullable<FeedbackItem["thread"]>;
   actions: ThreadActions;
-  onShowLocation: (file: string, line: number | null, side: Side) => void;
-  onFollowUp: (file: string, line: number | null, side: Side) => void;
+  onShowLocation: (file: string, line: number | null, side: Side, url: string | null) => void;
+  onFollowUp: (file: string, line: number | null, side: Side, url: string | null) => void;
 }) {
   const draftBody = item.replyDraft?.body ?? "";
   const [text, setText] = useState(draftBody);
@@ -140,6 +143,24 @@ function ThreadCard({ item, thread, actions, onShowLocation, onFollowUp }: {
     saved.current = draftBody;
     if (draftBody) setReplying(true);
   }, [draftBody]);
+  const card = useRef<HTMLElement>(null);
+  const box = useRef<HTMLTextAreaElement>(null);
+  const replyButton = useRef<HTMLButtonElement>(null);
+  // Opening the box focuses it; Send and Discard hand focus back to Reply.
+  const focusNext = useRef<"box" | "reply" | null>(null);
+  useEffect(() => {
+    const target = focusNext.current === "box" ? box.current : focusNext.current === "reply" ? replyButton.current : null;
+    focusNext.current = null;
+    target?.focus();
+  }, [replying]);
+  // Unsaved text is saved when the card goes away, such as on a view switch, unless Send or Discard is settling it.
+  const live = useRef({ text, actions, thread });
+  live.current = { text, actions, thread };
+  const settling = useRef(false);
+  useEffect(() => () => {
+    const { text, actions, thread } = live.current;
+    if (!settling.current && text !== saved.current) actions.saveDraft(thread, text);
+  }, []);
 
   const file = thread.path;
   // The thread's line in the current diff; an outdated thread may only have the assistant's pointer.
@@ -154,27 +175,47 @@ function ThreadCard({ item, thread, actions, onShowLocation, onFollowUp }: {
     try { await operation(); } finally { setBusy(false); }
   }
   function saveIfChanged(event: FocusEvent<HTMLTextAreaElement>) {
-    // Send and Discard settle the draft themselves.
-    if (text === saved.current || (event.relatedTarget as HTMLElement | null)?.dataset.replyAction) return;
+    // This card's Send and Discard settle the draft themselves.
+    const related = event.relatedTarget as HTMLElement | null;
+    if (text === saved.current || (related?.dataset.replyAction && card.current?.contains(related))) return;
     saved.current = text;
     actions.saveDraft(thread, text);
   }
+  async function settle(operation: () => Promise<void>) {
+    settling.current = true;
+    try { await run(operation); } finally { settling.current = false; }
+  }
+  async function send() {
+    const body = text;
+    if (await actions.send(thread, body.trim())) {
+      saved.current = ""; setText(""); focusNext.current = "reply"; setReplying(false);
+    } else if (body !== saved.current) {
+      // Not sent: keep it as the thread's draft, so leaving the view doesn't lose it.
+      saved.current = body;
+      actions.saveDraft(thread, body);
+    }
+  }
+  async function discard() {
+    if (saved.current || item.replyDraft) await actions.discard(thread);
+    saved.current = ""; setText(""); focusNext.current = "reply"; setReplying(false);
+  }
 
   return (
-    <article aria-label={item.title} className="space-y-2.5 rounded-xl border border-border border-l-[3px] border-l-primary/60 bg-card p-3 shadow-xs">
+    <article ref={card} aria-label={item.title} className="space-y-2.5 rounded-xl border border-border border-l-[3px] border-l-primary/60 bg-card p-3 shadow-xs">
       <div className="flex flex-wrap items-center gap-1.5">
         {item.assessment && <VerdictChip verdict={item.assessment.verdict} />}
         <Badge tone={status.tone}>{status.label}</Badge>
         {thread.isOutdated && <Badge icon={<Icon name="GitCommit" aria-hidden />}>Code changed</Badge>}
-        <button
-          type="button"
-          disabled={!file}
-          aria-label={file ? `Show ${file}${shownLine != null ? `:${shownLine}` : ""} in the diff` : "No file"}
-          className="ml-auto flex min-w-0 max-w-full items-center rounded-sm text-xs decoration-muted-foreground/50 underline-offset-2 enabled:hover:underline disabled:opacity-60"
-          onClick={() => file && onShowLocation(file, line, side)}
-        >
-          {file ? <><FilePath path={file} className="min-w-0 text-[11px]" />{shownLine != null && <span className="shrink-0 font-mono text-[11px] text-primary">:{shownLine}</span>}</> : <span className="text-muted-foreground">Whole PR</span>}
-        </button>
+        {file ? (
+          <button
+            type="button"
+            aria-label={`Show ${file}${shownLine != null ? `:${shownLine}` : ""} in the diff`}
+            className="ml-auto flex min-w-0 max-w-full items-center rounded-sm text-xs decoration-muted-foreground/50 underline-offset-2 hover:underline"
+            onClick={() => onShowLocation(file, line, side, thread.url)}
+          >
+            <FilePath path={file} className="min-w-0 text-[11px]" />{shownLine != null && <span className="shrink-0 font-mono text-[11px] text-primary">:{shownLine}</span>}
+          </button>
+        ) : <span className="ml-auto text-xs text-muted-foreground">Whole PR</span>}
       </div>
       <div className="space-y-1">
         <p className="text-xs font-medium text-muted-foreground">Your comment</p>
@@ -185,15 +226,10 @@ function ThreadCard({ item, thread, actions, onShowLocation, onFollowUp }: {
       {replying && (
         <div className="space-y-2 border-t border-border pt-2.5">
           {drafted && <Badge tone="agent" size="sm" icon={<Icon name="Sparkles" aria-hidden />}>Drafted by assistant</Badge>}
-          <Textarea aria-label={`Reply to ${item.title}`} value={text} disabled={busy} onChange={(event) => setText(event.target.value)} onBlur={saveIfChanged} placeholder="Reply on GitHub…" />
+          <Textarea ref={box} aria-label={`Reply to ${item.title}`} value={text} disabled={busy} onChange={(event) => setText(event.target.value)} onBlur={saveIfChanged} placeholder="Reply on GitHub…" />
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" data-reply-action="send" disabled={busy || !text.trim()} onClick={() => void run(async () => {
-              if (await actions.send(thread, text.trim())) { saved.current = ""; setText(""); setReplying(false); }
-            })}><Icon name="Github" aria-hidden />Send</Button>
-            <Button size="sm" variant="ghost" data-reply-action="discard" disabled={busy} onClick={() => void run(async () => {
-              if (saved.current || item.replyDraft) await actions.discard(thread);
-              saved.current = ""; setText(""); setReplying(false);
-            })}>Discard</Button>
+            <Button size="sm" data-reply-action="send" disabled={busy || !text.trim()} onClick={() => void settle(send)}><Icon name="Github" aria-hidden />Send</Button>
+            <Button size="sm" variant="ghost" data-reply-action="discard" disabled={busy} onClick={() => void settle(discard)}>Discard</Button>
           </div>
         </div>
       )}
@@ -201,8 +237,8 @@ function ThreadCard({ item, thread, actions, onShowLocation, onFollowUp }: {
         <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground" disabled={busy} onClick={() => void run(() => actions.resolve(thread, !thread.isResolved))}>
           <Icon name={thread.isResolved ? "RotateCcw" : "CircleCheck"} className="size-3.5" aria-hidden />{thread.isResolved ? "Unresolve" : "Resolve"}
         </Button>
-        {!replying && <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground" onClick={() => setReplying(true)}><Icon name="CornerDownRight" className="size-3.5" aria-hidden />Reply</Button>}
-        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground" disabled={!file} onClick={() => file && onFollowUp(file, thread.line, side)}>
+        {!replying && <Button ref={replyButton} variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground" onClick={() => { focusNext.current = "box"; setReplying(true); }}><Icon name="CornerDownRight" className="size-3.5" aria-hidden />Reply</Button>}
+        <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-muted-foreground" disabled={!file} onClick={() => file && onFollowUp(file, thread.line, side, thread.url)}>
           <Icon name="MessageSquarePlus" className="size-3.5" aria-hidden />Follow up
         </Button>
       </div>
@@ -241,39 +277,52 @@ export const FeedbackPanel = memo(function FeedbackPanel({ targetKey, review, re
   review?: { submittedVerdict?: Verdict | null } | null;
   /** The review revision the page shows, for draft changes. */
   revision?: string;
-  onShowLocation: (file: string, line: number | null, side: Side) => void;
+  /** `url` is the thread on GitHub, for a file the guide doesn't show. */
+  onShowLocation: (file: string, line: number | null, side: Side, url: string | null) => void;
   /** Open a comment box at the line, or show the file when the thread has no current line. */
-  onFollowUp: (file: string, line: number | null, side: Side) => void;
+  onFollowUp: (file: string, line: number | null, side: Side, url: string | null) => void;
   /** The assistant's suggestion went into the draft. */
   onDraftUpdated: () => void;
 }) {
   const rpc = useRpc<typeof rpcContract>();
   const [feedback, setFeedback] = useState<FeedbackView | null>(null);
+  // Item ids in the order shown. Opening and Refresh rank them; other updates keep each card in place.
+  const [order, setOrder] = useState<string[]>([]);
   const [loadError, setLoadError] = useState(false);
   const [busy, setBusy] = useState<"check" | "refresh" | "suggested" | "remaining" | null>(null);
+  const [confirming, setConfirming] = useState<"suggested" | "remaining" | null>(null);
   const request = useRef(0);
 
-  const load = useCallback(async () => {
+  const present = useCallback((next: FeedbackView, rank: boolean) => {
+    setFeedback(next);
+    setOrder((previous) => {
+      const ranked = [...next.items].sort((a, b) => feedbackRank(a) - feedbackRank(b)).map((item) => item.id);
+      if (rank) return ranked;
+      const kept = previous.filter((id) => ranked.includes(id));
+      return [...kept, ...ranked.filter((id) => !kept.includes(id))];
+    });
+  }, []);
+  const load = useCallback(async (rank = false) => {
     const id = ++request.current;
     try {
       const { feedback } = await rpc.call("getFeedback", { targetKey });
       if (id !== request.current) return;
-      setFeedback(feedback as FeedbackView);
+      present(feedback as FeedbackView, rank);
       setLoadError(false);
     } catch {
       if (id === request.current) setLoadError(true);
     }
-  }, [rpc, targetKey]);
+  }, [rpc, targetKey, present]);
   useEffect(() => {
-    void load();
+    void load(true);
     return () => { request.current++; };
   }, [load]);
   useRealtime(`feedback:${targetKey}`, () => { void load(); });
   useRealtime(`review:${targetKey}`, () => { void load(); });
 
-  const show = (next: unknown) => {
+  const show = (next: unknown, rank = false) => {
     request.current++;
-    if (next) setFeedback(next as FeedbackView);
+    if (next) present(next as FeedbackView, rank);
   };
 
   async function act(kind: NonNullable<typeof busy>, operation: () => Promise<void>) {
@@ -288,14 +337,27 @@ export const FeedbackPanel = memo(function FeedbackPanel({ targetKey, review, re
     else toast.error(result.error ?? "Couldn’t start the check.");
   });
   const refresh = () => act("refresh", async () => {
-    show((await rpc.call("refreshFeedback", { targetKey })).feedback);
+    show((await rpc.call("refreshFeedback", { targetKey })).feedback, true);
   });
-  const applySuggestion = (mode: "suggested" | "remaining") => act(mode, async () => {
+  async function applySuggestion(mode: "suggested" | "remaining") {
     const result = await rpc.call("useSuggestedVerdict", { targetKey, mode, ...(revision ? { revision } : {}) });
     if (!result.ok) return void toast.error(result.error ?? "Couldn’t update the draft.");
     onDraftUpdated();
     toast.success("Draft updated — review it before submitting.");
+  }
+  // A summary you wrote, saved or still unsaved in this tab, is replaced only once you say so.
+  const suggest = (mode: "suggested" | "remaining") => act(mode, async () => {
+    const { draft } = await rpc.call("getDraft", { targetKey });
+    const unsaved = readDraftRecovery(targetKey).summary;
+    if ((unsaved ? unsaved.body : draft?.body ?? "").trim()) setConfirming(mode);
+    else await applySuggestion(mode);
   });
+  const replace = () => {
+    if (!confirming) return;
+    const mode = confirming;
+    setConfirming(null);
+    void act(mode, () => applySuggestion(mode));
+  };
 
   const actions: ThreadActions = {
     resolve: async (thread, resolved) => {
@@ -335,7 +397,7 @@ export const FeedbackPanel = memo(function FeedbackPanel({ targetKey, review, re
       <div role="alert" className="m-4 flex flex-wrap items-center gap-2 rounded-lg border border-destructive/20 bg-destructive/10 px-3 py-2 text-sm text-destructive-text">
         <Icon name="AlertCircle" className="size-4 shrink-0" aria-hidden />
         <p className="min-w-0 flex-1">Couldn't load your feedback.</p>
-        <Button variant="outline" size="sm" onClick={() => void load()}>Try again</Button>
+        <Button variant="outline" size="sm" onClick={() => void load(true)}>Try again</Button>
       </div>
     );
   }
@@ -351,7 +413,8 @@ export const FeedbackPanel = memo(function FeedbackPanel({ targetKey, review, re
     );
   }
 
-  const items = [...feedback.items].sort((a, b) => feedbackRank(a) - feedbackRank(b));
+  const byId = new Map(feedback.items.map((item) => [item.id, item]));
+  const items = order.flatMap((id) => byId.get(id) ?? []);
   const tally = feedbackTally(items);
   const run = feedback.run;
   const checked = run && timeAgo(run.assessedAt);
@@ -363,7 +426,7 @@ export const FeedbackPanel = memo(function FeedbackPanel({ targetKey, review, re
         <div className="min-w-0 flex-1 space-y-0.5">
           <h2 className="text-sm font-semibold text-foreground">Your feedback</h2>
           <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground">
-            {tally && <span className="font-medium tabular-nums text-foreground/90">{tally}</span>}
+            {tally && <span className="font-medium tabular-nums text-foreground/90" title={items.some((item) => item.assessment) ? undefined : "Resolved or answered"}>{tally}</span>}
             {tally && run && <span aria-hidden>·</span>}
             {run && <span>Checked {checked ?? "earlier"} · <span className="font-mono">{run.headSha.slice(0, 7)}</span></span>}
             {run && !run.current && <Badge tone="warning" size="sm" title="The assistant checked an earlier commit than the PR’s head.">older commit</Badge>}
@@ -385,8 +448,8 @@ export const FeedbackPanel = memo(function FeedbackPanel({ targetKey, review, re
           {(run.suggestedBody || run.summary) && <Markdown content={withLineBreaks(run.suggestedBody || run.summary)} className="text-sm leading-relaxed" />}
           {(run.suggestedVerdict || left) && (
             <div className="flex flex-wrap gap-2">
-              {run.suggestedVerdict && <Button size="sm" disabled={!!busy} onClick={() => void applySuggestion("suggested")}>Use as draft</Button>}
-              {left && <Button size="sm" variant="outline" disabled={!!busy} onClick={() => void applySuggestion("remaining")}>Request what’s left</Button>}
+              {run.suggestedVerdict && <Button size="sm" disabled={!!busy} onClick={() => void suggest("suggested")}>Use as draft</Button>}
+              {left && <Button size="sm" variant="outline" disabled={!!busy} onClick={() => void suggest("remaining")}>Request what’s left</Button>}
             </div>
           )}
         </section>
@@ -398,6 +461,18 @@ export const FeedbackPanel = memo(function FeedbackPanel({ targetKey, review, re
             : <SummaryCard key={item.id} item={item} />)}
         </div>
       ) : <EmptyState text="Your last review had no line comments." />}
+      <Dialog open={!!confirming} onOpenChange={(open) => { if (!open) setConfirming(null); }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Replace your summary?</DialogTitle>
+            <DialogDescription>The assistant’s draft replaces the review summary you wrote.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="gap-2 sm:space-x-0">
+            <Button variant="outline" onClick={() => setConfirming(null)}>Keep mine</Button>
+            <Button onClick={replace}>Replace summary</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 });

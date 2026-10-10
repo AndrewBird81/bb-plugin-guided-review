@@ -60,6 +60,8 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
   const [writeAnother, setWriteAnother] = useState(false);
   const [receipt, setReceipt] = useState<Verdict | null>(null);
   const [showNotes, setShowNotes] = useState(false);
+  // Unsaved summary edits the assistant's suggestion replaced, to restore.
+  const [replaced, setReplaced] = useState<Pick<Draft, "verdict" | "body"> | null>(null);
   const [tab, setTab] = useState<"draft" | "notes" | "agent">(() => {
     const saved = getReviewState(targetKey).activeTool;
     return saved === "notes" || saved === "agent" && agent ? saved : "draft";
@@ -172,14 +174,22 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
     void enqueue(() => rpc.call("getDraft", { targetKey })).then(updateComments).catch(() => {});
   }, [enqueue, rpc, targetKey]);
   useRealtime(`draft:${targetKey}`, refreshComments);
-  // The verdict and summary changed elsewhere, such as the assistant's suggestion; unsaved edits win.
+  // The verdict and summary changed elsewhere: the assistant's suggestion, which the reviewer agreed would
+  // replace their summary. Unsaved edits are set aside to restore rather than saved over it.
   const reloadSummary = useCallback(() => {
-    if (summary.current.dirty || pending.current) return;
     void enqueue(() => rpc.call("getDraft", { targetKey })).then((result) => {
       updateComments(result);
-      if (!mounted.current || summary.current.dirty) return;
+      if (!mounted.current) return;
       const next = result.draft as Draft;
-      summary.current = { ...summary.current, verdict: next.verdict, body: next.body };
+      const mine = summary.current;
+      if (mine.dirty || pending.current) {
+        if (pending.current) clearTimeout(pending.current);
+        pending.current = null;
+        if (mine.body !== next.body || mine.verdict !== next.verdict) setReplaced({ verdict: mine.verdict, body: mine.body });
+        updateDraftRecovery(targetKey, { summary: undefined });
+        setSaved("Draft saved");
+      }
+      summary.current = { ...mine, verdict: next.verdict, body: next.body, dirty: false };
       setDraft((previous) => ({ ...previous, verdict: next.verdict, body: next.body }));
     }).catch(() => {});
   }, [enqueue, rpc, targetKey]);
@@ -386,6 +396,11 @@ export const DraftTray = memo(function DraftTray({ targetKey, activeChapterId, a
           </div>
           <div className="space-y-3 border-t border-border p-3">
             <Button variant="ghost" size="sm" className="-ml-2 text-muted-foreground" aria-expanded={showNotes} onClick={() => setShowNotes((value) => !value)}><Icon name="ChevronDown" className={cn("size-4 transition-transform duration-150", !showNotes && "-rotate-90")} aria-hidden /> Review summary</Button>
+            {replaced && <div role="status" className="flex flex-wrap items-center gap-2 rounded-md border border-warning/20 bg-warning/10 px-2.5 py-1.5 text-xs text-warning-text">
+              <span className="min-w-0 flex-1">The assistant’s suggestion replaced your unsaved summary.</span>
+              <Button variant="outline" size="sm" className="h-7 px-2 text-xs" disabled={busy} onClick={() => { updateSummary(replaced); setReplaced(null); setShowNotes(true); }}>Restore yours</Button>
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={() => setReplaced(null)}>Dismiss</Button>
+            </div>}
             {showNotes ? <label className="block space-y-2"><span className="text-xs text-muted-foreground">{isLocal ? "Saved with your local draft." : "Included with your GitHub review."}</span><Textarea aria-label="Review summary" disabled={busy} value={draft.body} onChange={(event) => updateSummary({ body: event.target.value })} onBlur={() => void flush().catch(() => {})} placeholder={isLocal ? "Summary of this review" : "What should the author know overall?"} /></label> : draft.body.trim() && <p className="line-clamp-3 whitespace-pre-wrap text-sm text-muted-foreground">{draft.body}</p>}
           </div>
           <div className="space-y-3 border-t border-border p-3">

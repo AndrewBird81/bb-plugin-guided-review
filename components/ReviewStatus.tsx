@@ -5,10 +5,11 @@ import { Icon, type IconName } from "./ui/icon";
 
 /** How a review's status reads: GitHub's verdict colors, amber for work in progress, chosen by whose turn it is and why. */
 export function statusLook(review: ReviewItem): { label: string; tone: Tone; icon?: IconName; busy?: boolean } {
-  const { label, reason } = reviewState(review);
+  const { label, reason, failed } = reviewState(review);
   if (label === "Generating") return { label, tone: "warning", icon: "Loading", busy: true };
+  // A failed guide keeps the reason underneath; the failure is what to show.
+  if (failed || label === "Failed") return { label, tone: "danger", icon: "AlertTriangle" };
   switch (reason) {
-    case "failed": return { label, tone: "danger", icon: "AlertTriangle" };
     case "merged": return { label, tone: "merged", icon: "GitMerge" };
     case "closed": return { label, tone: "danger", icon: "GitPullRequestClosed" };
     case "archived": return { label, tone: "neutral", icon: "Archive" };

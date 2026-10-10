@@ -168,6 +168,7 @@ export const DiffViewer = memo(function DiffViewer({
   reveal,
   since,
   sinceOnly = false,
+  showRemoved = true,
 }: {
   diffLayout?: "split" | "unified";
   themeMode?: "light" | "dark";
@@ -183,14 +184,19 @@ export const DiffViewer = memo(function DiffViewer({
   since?: Map<string, FileInterdiff> | null;
   /** Show only what changed since your review. */
   sinceOnly?: boolean;
+  /** Show files removed since your review here; they belong to no chapter, so the workspace shows them in the last one. */
+  showRemoved?: boolean;
 }) {
   const theme = useTheme();
   const compact = useMediaQuery("(max-width: 767px)");
   const draft = useContext(InlineDraftContext);
   const root = useRef<HTMLDivElement>(null);
   const filtering = sinceOnly && !!since;
+  // The chapter's files by value: a reload's new array with the same files mustn't re-parse every diff.
+  const fileKey = files.join("\0");
   const { perFile, unchanged } = useMemo(() => {
-    const chapter = splitPatchByFile(patch).filter((f) => files.includes(f.path));
+    const wanted = new Set(fileKey.split("\0"));
+    const chapter = splitPatchByFile(patch).filter((f) => wanted.has(f.path));
     const shown = filtering ? chapter.filter((f) => since!.get(f.path)?.status !== "unchanged") : chapter;
     const perFile = shown.flatMap((f) => {
       const change = since?.get(f.path);
@@ -208,8 +214,8 @@ export const DiffViewer = memo(function DiffViewer({
       }];
     });
     return { perFile, unchanged: chapter.length - shown.length };
-  }, [patch, files, since, filtering]);
-  const removed = useMemo(() => (filtering ? [...since!.values()].filter((f) => f.status === "removed") : []), [since, filtering]);
+  }, [patch, fileKey, since, filtering]);
+  const removed = useMemo(() => (filtering && showRemoved ? [...since!.values()].filter((f) => f.status === "removed") : []), [since, filtering, showRemoved]);
 
   // Side-by-side needs room: squeezed between the chapters and the review panel, each side would clip its code.
   const [narrow, setNarrow] = useState(false);

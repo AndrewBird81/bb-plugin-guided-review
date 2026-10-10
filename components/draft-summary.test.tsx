@@ -31,17 +31,29 @@ test("the draft's verdict and summary reload when they change elsewhere", async 
   slot.lifecycle.unmount();
 });
 
-test("unsaved summary edits win over a reload", async () => {
+test("a suggestion over unsaved summary edits sets them aside to restore, and doesn't save over it", async () => {
   let draft = { targetKey: "keep", verdict: "COMMENT", body: "", comments: [] as any[] };
-  const setVerdict = vi.fn(() => new Promise(() => {}));
+  const setVerdict = vi.fn(() => ({ draft }));
   const slot = await renderTray("keep", { getDraft: () => ({ draft }), setVerdict });
   await slot.findByText("Draft saved");
   fireEvent.click(slot.getByRole("button", { name: "Review summary" }));
-  fireEvent.change(slot.getByRole("textbox", { name: "Review summary" }), { target: { value: "My own words." } });
+  const summary = slot.getByRole("textbox", { name: "Review summary" }) as HTMLTextAreaElement;
+  fireEvent.change(summary, { target: { value: "My own words." } });
   draft = { ...draft, verdict: "APPROVE", body: "Looks good now." };
   await slot.emitRealtime("draft-summary:keep", {});
-  expect((slot.getByRole("textbox", { name: "Review summary" }) as HTMLTextAreaElement).value).toBe("My own words.");
-  expect(pressed(slot, "Approve")).toBe("false");
+  await waitFor(() => expect(summary.value).toBe("Looks good now."));
+  expect(pressed(slot, "Approve")).toBe("true");
+  expect(slot.getByText("The assistant’s suggestion replaced your unsaved summary.")).toBeTruthy();
+  // The pending save of the reviewer's text doesn't overwrite the suggestion.
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  expect(setVerdict).not.toHaveBeenCalled();
+  expect(sessionStorage.getItem("guided-review:draft-recovery:keep")).toBeNull();
+
+  fireEvent.click(slot.getByRole("button", { name: "Restore yours" }));
+  expect(summary.value).toBe("My own words.");
+  expect(pressed(slot, "Comment")).toBe("true");
+  expect(slot.queryByText("The assistant’s suggestion replaced your unsaved summary.")).toBeNull();
+  await waitFor(() => expect(setVerdict).toHaveBeenCalledWith({ targetKey: "keep", verdict: "COMMENT", body: "My own words.", revision: "r1" }));
   slot.lifecycle.unmount();
 });
 

@@ -56,6 +56,12 @@ test("since your review: unchanged files hide, a changed file shows only its cha
   expect(within(removed).getByTestId("filediff").textContent).toContain("gone");
 });
 
+test("removed files show only in the chapter that shows them", () => {
+  render(<DiffViewer patch={current} files={chapter} views={new Map()} onToggleViewed={() => {}} since={since} sinceOnly showRemoved={false} />);
+  expect(diffOf("src/a.ts")).toBeTruthy();
+  expect(screen.queryByRole("region", { name: "src/d.ts removed" })).toBeNull();
+});
+
 test("with the filter off, every file shows in full and changed ones are badged", () => {
   render(<DiffViewer patch={current} files={chapter} views={new Map()} onToggleViewed={() => {}} since={since} />);
   expect(diffOf("src/a.ts")!.getByTestId("filediff").textContent).toContain("new");

@@ -1,7 +1,7 @@
 import { memo, useState, type ReactNode } from "react";
 import { Markdown, UrlLink } from "@get-bb/plugin-sdk/app";
 import { reviewState } from "../lib/review-state";
-import { computeTurn, type ReviewRound, type Turn } from "../lib/turn";
+import { canSnooze, computeTurn, type ReviewRound, type Turn } from "../lib/turn";
 import { cn } from "../lib/utils";
 import { Icon } from "./ui/icon";
 import { Badge } from "./ui/badge";
@@ -92,7 +92,6 @@ export const ReviewHeader = memo(function ReviewHeader({
   const kind = kindLook(review);
   const state = reviewState(review);
   const turn: Turn = review.turn ?? computeTurn(review);
-  const reviewed = !!(review.submittedVerdict || review.submittedAt || review.signals?.lastReviewAt);
   const rounds: ReviewRound[] = review.signals?.rounds ?? [];
   const progress: { done: number; total: number; source: "assistant" | "threads" } | null = review.progress ?? null;
 
@@ -109,15 +108,15 @@ export const ReviewHeader = memo(function ReviewHeader({
             {state.label !== "Ready" && <StatusBadge review={review} />}
             {turn.blocking && <Badge tone="warning" icon={<Icon name="Lock" aria-hidden />} title="Everyone else approved; only your changes requested is left.">Blocks merge</Badge>}
             {progress && progress.total > 0 && (
-              <button type="button" onClick={onShowFeedback} title="Show your feedback" className="rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
+              <button type="button" onClick={onShowFeedback} title={progress.source === "assistant" ? "Show your feedback" : "Resolved or answered. Show your feedback"} className="rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring">
                 <Badge tone={progress.done === progress.total ? "success" : "primary"} className="cursor-pointer tabular-nums" icon={progress.source === "assistant" ? <Icon name="Sparkles" aria-hidden /> : <Icon name="MessageSquare" aria-hidden />}>
-                  {progress.done}/{progress.total} {progress.source === "assistant" ? "addressed" : "resolved"}
+                  {progress.done}/{progress.total} {progress.source === "assistant" ? "addressed" : "handled"}
                 </Badge>
               </button>
             )}
             {onSnooze && turn.reason === "snoozed" ? (
               <Button variant="ghost" size="sm" className="h-7 px-2 text-muted-foreground" disabled={snoozing} onClick={() => onSnooze(false)}>Back to Needs review</Button>
-            ) : onSnooze && turn.group === "needs" && reviewed && (
+            ) : onSnooze && canSnooze(review, turn) && (
               <Button variant="ghost" size="sm" className="h-7 px-2 text-muted-foreground" disabled={snoozing} onClick={() => onSnooze(true)}>
                 <Icon name="Clock" className="size-3.5" aria-hidden />Not yet
               </Button>

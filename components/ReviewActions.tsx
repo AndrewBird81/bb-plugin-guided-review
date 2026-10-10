@@ -3,6 +3,7 @@ import { useRpc } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import type { rpcContract } from "../src/rpc-contract";
 import { reviewState, type ReviewItem } from "../lib/review-state";
+import { canSnooze } from "../lib/turn";
 import { updateDraftRecovery } from "../lib/draft-recovery";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -30,7 +31,7 @@ export function ReviewActions({ review, onChanged, onDeleted, describedBy, class
   const closed = review.prState === "MERGED" || review.prState === "CLOSED" || !!review.archivedAt;
   const turn = reviewState(review);
   // Only a review you've already given can wait for the author.
-  const canSnooze = turn.group === "needs" && (!!review.submittedVerdict || !!review.signals?.lastReviewAt);
+  const snoozable = canSnooze(review, turn);
 
   async function run(call: () => Promise<{ ok: boolean; error?: string }>, success: string) {
     setBusy(true);
@@ -84,7 +85,7 @@ export function ReviewActions({ review, onChanged, onDeleted, describedBy, class
         {review.status === "tracked" && <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground hover:text-foreground" onClick={() => void startTracked()}>
           <Icon name="Sparkles" aria-hidden />Start review
         </Button>}
-        {canSnooze && <>
+        {snoozable && <>
           <Button variant="ghost" size="sm" className="w-full justify-start text-muted-foreground hover:text-foreground" aria-describedby={snoozeHintId} onClick={() => void setSnoozed(true)}>
             <Icon name="Clock" aria-hidden />Not yet
           </Button>

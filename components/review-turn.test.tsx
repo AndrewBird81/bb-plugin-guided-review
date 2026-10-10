@@ -115,6 +115,7 @@ test("Use as draft opens the draft with the assistant's verdict and summary", as
 test("the header shows your review rounds, progress, Blocks merge, and Not yet", async () => {
   const { slot, rpc } = await renderWorkspace({
     submittedVerdict: "REQUEST_CHANGES",
+    submittedAt: now - DAY,
     turn: turn({ blocking: true }),
     progress: { done: 2, total: 5, source: "assistant" },
     signals: { lastReviewSha: "old", rounds: [

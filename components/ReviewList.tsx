@@ -53,7 +53,7 @@ function TurnMeta({ review, turn }: { review: ReviewItem; turn: Turn }) {
     <span className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
       {turn.blocking && <Badge tone="warning" size="sm">Blocks merge</Badge>}
       {why && <span>{why}</span>}
-      {progress && <span className="tabular-nums">{progress.done}/{progress.total} {progress.source === "assistant" ? "addressed" : "resolved"}</span>}
+      {progress && <span className="tabular-nums" title={progress.source === "assistant" ? undefined : "Resolved or answered"}>{progress.done}/{progress.total} {progress.source === "assistant" ? "addressed" : "handled"}</span>}
       {commits > 0 && <span className="inline-flex items-center gap-1 tabular-nums"><Icon name="GitCommit" className="size-3" aria-hidden />+{commits} {commits === 1 ? "commit" : "commits"}</span>}
       {ci && <span className="inline-flex items-center gap-1"><Icon name={ci.icon} className={cn("size-3", TONE_TEXT[ci.tone])} aria-hidden />{ci.label}</span>}
       {waited && <span className="text-subtle-foreground">your turn · {waited}</span>}

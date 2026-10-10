@@ -5,7 +5,7 @@ import type { SelectedLineRange } from "@pierre/diffs";
 import type { rpcContract } from "../src/rpc-contract";
 import type { CommentLocation } from "../src/draft";
 import type { FileInterdiff } from "../src/interdiff";
-import { computeTurn, type TurnReason } from "../lib/turn";
+import { baselineOf, computeTurn, type TurnReason } from "../lib/turn";
 import { cn } from "../lib/utils";
 import { experimental_useCodeTheme } from "@get-bb/plugin-sdk/app";
 import { useMediaQuery } from "./ui/hooks/use-media-query";
@@ -55,6 +55,8 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const [loadError, setLoadError] = useState<string | null>(null);
   const [rebuilding, setRebuilding] = useState(false);
   const request = useRef(0);
+  // The guide as last shown; a reload with the same guide keeps its object, so the diff doesn't redraw.
+  const shownGuide = useRef("");
   const resizeCleanup = useRef<(() => void) | null>(null);
   const persisted = useMemo(() => getReviewState(targetKey), [targetKey]);
 
@@ -76,6 +78,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   const [draftPrefill, setDraftPrefill] = useState<CommentPrefill | undefined>();
   const [showDraft, setShowDraft] = useState<number | undefined>();
   const [since, setSince] = useState<Map<string, FileInterdiff> | null>(null);
+  const [sinceError, setSinceError] = useState<string | null>(null);
   const [sinceOnly, setSinceOnly] = useState(false);
   const [snoozing, setSnoozing] = useState(false);
   const [reveal, setReveal] = useState<{ at: CommentLocation; nonce: number }>();
@@ -137,7 +140,11 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
       setRevision(revision);
       setReview(review);
       if (review) setDefaultView((current) => current ?? (opensOnFeedback(review) ? "feedback" : "diff"));
-      setGuide(guide);
+      const guideJson = JSON.stringify(guide ?? null);
+      if (guideJson !== shownGuide.current) {
+        shownGuide.current = guideJson;
+        setGuide(guide);
+      }
       setPatch(patch);
       setChecks(checksRes);
       if (guide?.sections?.length) {
@@ -160,17 +167,21 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
   useRealtime(`review:${targetKey}`, () => { void load(); });
 
   // What changed since your last review, when the diff shown isn't the one you reviewed.
-  const baselineSha: string | null = review?.signals?.lastReviewSha ?? review?.submittedHeadSha ?? null;
+  const baselineSha = review ? baselineOf(review).sha : null;
   const sinceKey = baselineSha && review?.headSha && baselineSha !== review.headSha ? `${baselineSha}..${review.headSha}` : null;
   useEffect(() => {
     setSince(null);
+    setSinceError(null);
     if (!sinceKey) return;
     let cancelled = false;
+    const failed = (error?: string) => { if (!cancelled) setSinceError(error ?? "Couldn’t compare with your last review."); };
     rpc.call("getSinceReview", { targetKey }).then((result) => {
-      if (!cancelled && result.baseline && !result.error) setSince(new Map((result.files as FileInterdiff[]).map((file) => [file.file, file])));
-    }).catch(() => {});
+      if (result.error) failed(result.error);
+      else if (!cancelled && result.baseline) setSince(new Map((result.files as FileInterdiff[]).map((file) => [file.file, file])));
+    }).catch((error) => failed(error instanceof Error ? error.message : undefined));
     return () => { cancelled = true; };
   }, [rpc, targetKey, sinceKey]);
+  useEffect(() => { if (!since) setSinceOnly(false); }, [since]);
   const changedSince = useMemo(() => {
     if (!since || !guide?.sections) return undefined;
     return Object.fromEntries(guide.sections.map((section: any) => [section.id, section.diffs.filter((diff: any) => {
@@ -307,15 +318,30 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
     setMobileChapters(false);
     setReveal({ at, nonce: Date.now() });
   }, [guide]);
+  // A thread on a file outside every chapter can't be shown here; its GitHub link can.
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+  const outsideGuide = useCallback((file: string, url: string | null) => {
+    if (guide?.sections.some((section: any) => section.diffs.some((diff: any) => diff.file === file))) return false;
+    toast.info(`${file} isn’t in any chapter.`, url ? { action: { label: "Open on GitHub", onClick: () => navigateRef.current.openUrl(url) } } : undefined);
+    return true;
+  }, [guide]);
   // A line from the Feedback view: the whole diff, so the line is there. Without a line, the file.
-  const showLocation = useCallback((file: string, line: number | null, side: "LEFT" | "RIGHT") => {
+  const showLocation = useCallback((file: string, line: number | null, side: "LEFT" | "RIGHT", url: string | null = null) => {
+    if (outsideGuide(file, url)) return;
     setSinceOnly(false);
     showComment({ file, line: line ?? 0, side });
-  }, [showComment]);
-  const followUp = useCallback((file: string, line: number | null, side: "LEFT" | "RIGHT") => {
+  }, [outsideGuide, showComment]);
+  const followUp = useCallback((file: string, line: number | null, side: "LEFT" | "RIGHT", url: string | null = null) => {
+    if (outsideGuide(file, url)) return;
     showLocation(file, line, side);
     if (line != null) setDraftPrefill({ file, line, side, nonce: Date.now() });
-  }, [showLocation]);
+  }, [outsideGuide, showLocation]);
+  const showDraftSummary = useCallback(() => setShowDraft(Date.now()), []);
+  const showFeedback = useMemo(() => isPr ? () => setView("feedback") : undefined, [isPr]);
+  const snoozeFromHeader = useMemo(() => isPr ? (snoozed: boolean) => void snooze(snoozed) : undefined, [isPr, snooze]);
+  const archived = !!review?.archivedAt;
+  const headerTrailing = useMemo(() => !archived && <RereviewBanner targetKey={targetKey} />, [archived, targetKey]);
   // The diff remounts after Threads; it shouldn't jump back to an old comment.
   useEffect(() => { if (view !== "diff") setReveal(undefined); }, [view]);
 
@@ -461,7 +487,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
       ) : (
         <div className="border-b border-border">
           <div className="px-4 pb-3.5 pt-3">
-            <ReviewHeader review={review} checks={checks} intent={guide.intent} sinceReview={guide.sinceReview} onShowFeedback={isPr ? () => setView("feedback") : undefined} onSnooze={isPr ? (snoozed) => void snooze(snoozed) : undefined} snoozing={snoozing} trailing={!review?.archivedAt && <RereviewBanner targetKey={targetKey} />} />
+            <ReviewHeader review={review} checks={checks} intent={guide.intent} sinceReview={guide.sinceReview} onShowFeedback={showFeedback} onSnooze={snoozeFromHeader} snoozing={snoozing} trailing={headerTrailing} />
           </div>
           {generatingReplacement && <p role="status" className="flex items-center gap-2 border-t border-warning/20 bg-warning/10 px-4 py-2 text-xs text-warning-text"><Icon name="Loading" className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden />Regenerating the guide. Your previous diff and unsaved edits remain visible.</p>}
         </div>
@@ -557,6 +583,12 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                 Since your review
               </Button>
             )}
+            {view === "diff" && sinceError && (
+              <span role="status" title={sinceError} className="flex items-center gap-1.5 text-xs text-destructive-text">
+                <Icon name="AlertCircle" className="size-3.5 shrink-0" aria-hidden />
+                Couldn’t compare with your last review
+              </span>
+            )}
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground md:ml-auto">
               {view === "diff" && activeFiles.length > 0 && (
                 <>
@@ -616,6 +648,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                 reveal={reveal}
                 since={since}
                 sinceOnly={sinceOnly}
+                showRemoved={activeId === guide.sections.at(-1)?.id}
               />
             ) : view === "feedback" ? (
               <FeedbackPanel
@@ -624,7 +657,7 @@ export const ReviewWorkspace = memo(function ReviewWorkspace({ targetKey }: { ta
                 revision={revision}
                 onShowLocation={showLocation}
                 onFollowUp={followUp}
-                onDraftUpdated={() => setShowDraft(Date.now())}
+                onDraftUpdated={showDraftSummary}
               />
             ) : (
               <ThreadsPanel targetKey={targetKey} />

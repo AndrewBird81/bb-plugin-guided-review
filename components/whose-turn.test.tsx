@@ -95,14 +95,14 @@ test("a row says why it's your turn, how the feedback stands, new commits, CI, a
   await slot.findByText("Change A");
   for (const text of ["Re-requested by @alice", "2/5 addressed", "+3 commits", "Checks failing", "your turn · 2d", "Blocks merge"]) expect(slot.getByText(text)).toBeTruthy();
   // The badge already says "Re-requested"; the second row's badge shows generation, so its why stays.
-  for (const text of ["Question for you", "1/4 resolved", "+1 commit", "Checks passing", "your turn · 3h"]) expect(slot.getByText(text)).toBeTruthy();
+  for (const text of ["Question for you", "1/4 handled", "+1 commit", "Checks passing", "your turn · 3h"]) expect(slot.getByText(text)).toBeTruthy();
   expect(slot.getAllByText("Blocks merge")).toHaveLength(1);
   slot.lifecycle.unmount();
 });
 
 test("a review you gave can wait with Not yet, come back to Needs review, and a tracked review can start its guide", async () => {
   const reviews = [
-    { targetKey: "given", title: "Change Given", status: "ready", submittedVerdict: "REQUEST_CHANGES", turn: turn("needs", "question", "Question for you") },
+    { targetKey: "given", title: "Change Given", status: "ready", submittedVerdict: "REQUEST_CHANGES", submittedAt: now - DAY, turn: turn("needs", "question", "Question for you") },
     { targetKey: "fresh", title: "Change Fresh", status: "ready", turn: turn("needs", "requested", "Review requested") },
     { targetKey: "tracked", title: "Change Tracked", status: "tracked", turn: turn("needs", "requested", "Review requested") },
     { targetKey: "snoozed", title: "Change Snoozed", status: "ready", signals: { lastReviewAt: 1 }, turn: turn("waiting", "snoozed", "Not yet") },
@@ -154,6 +154,8 @@ test("status badges take their tone from why it's your turn", async () => {
   expect(look(turn("reviewed", "approved", "Approved · updated"))).toEqual(["success", "Check"]);
   expect(look(turn("needs", "new", "Tracked"))).toEqual(["primary", undefined]);
   expect(look(turn("needs", "question", "Generating"))).toEqual(["warning", "Loading"]);
+  // A failed guide keeps the reason underneath; the badge shows the failure.
+  expect(look(turn("needs", "re-requested", "Failed", { failed: true }))).toEqual(["danger", "AlertTriangle"]);
 });
 
 test("whose-turn settings save into preferences, with one repository pattern per line", async () => {
